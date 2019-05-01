@@ -1,5 +1,7 @@
+import glob
 import itertools
 import os
+import shutil
 import subprocess
 import zipfile
 from enum import Enum
@@ -8,17 +10,16 @@ from pandas import *
 from shutil import *
 import openpyxl
 
-# HYPO: codes_folder and testcases_folder are available in file system
-
-cur_dir = os.getcwd()
-testcases_folder = os.path.join(cur_dir, "testcases")
-project_dir = os.path.join(cur_dir, "../base_project")
+base_dir = os.getcwd()
+testcases_dir = os.path.join(base_dir, "testcases")
+project_dir = os.path.join(base_dir, "project_dir")
+java_class_source_dir = "src"
+grammar_source_dir = java_class_source_dir
 runner_class = 'Toorla'
-codes_folder = os.path.join(cur_dir, "codes")
+runner_class_java_file = runner_class + '.java'
+codes_dir = os.path.join(base_dir, "codes")
 FAILURE = "BUILD FAILURE"
 testcase_extension = ".trl"
-fail_prefix = "fail_"
-pass_prefix = "pass_"
 COMPILED = "Compiled"
 excel_extension = ".xlsx"
 output_extension = ".out"
@@ -30,10 +31,66 @@ RUNSNUM = "#run"
 newer_version_sign = '$'
 testcase_mapper_filename = "testcases.csv"
 compressed_code_extension = ".zip"
-files_to_copy = {'Toorla.g4': os.path.join(project_dir, 'grammar'),
-                 'ToorlaCompiler.java': os.path.join(project_dir, 'src/')
-    , 'TreePrinter.java': os.path.join(project_dir, 'src/toorla/visitor')}
-pom_file = 'pom.xml'
+items_to_copy = {
+    'files': {
+        'Toorla.g4': os.path.join(project_dir, grammar_source_dir),
+        'ToorlaCompiler.java': os.path.join(project_dir, java_class_source_dir)
+    },
+    'directories': {
+        'toorla': os.path.join(project_dir, java_class_source_dir)
+    }
+}
+
+pom_filename = 'pom.xml'
+pom_file_content = '''<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>toorla</groupId>
+    <artifactId>student_project</artifactId>
+    <version>1.0-SNAPSHOT</version>
+    <properties>
+        <maven.compiler.source>1.8</maven.compiler.source>
+        <maven.compiler.target>1.8</maven.compiler.target>
+    </properties>
+
+    <build>
+        <sourceDirectory>
+            ''' + java_class_source_dir + '''
+        </sourceDirectory>
+        <plugins>
+            <plugin>
+                <groupId>org.antlr</groupId>
+                <artifactId>antlr4-maven-plugin</artifactId>
+                <version>4.7.2</version>
+                <executions>
+                    <execution>
+                        <id>antlr</id>
+                        <goals>
+                            <goal>antlr4</goal>
+                        </goals>
+                        <configuration>
+                            <sourceDirectory>''' + grammar_source_dir + '''</sourceDirectory>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+    <dependencies>
+        <dependency>
+            <groupId>org.antlr</groupId>
+            <artifactId>antlr4</artifactId>
+            <version>4.7.2</version>
+        </dependency>
+    </dependencies>
+
+
+
+</project> '''
+
 max_run_num = 5
 FULL_TESTCASE_GRADE = 1
 
@@ -90,10 +147,10 @@ def save_result(worksheet, grade, sid_list, test_case_name=None, version=0):
 
 
 def build_project():
-    if pom_file not in os.listdir(os.getcwd()):
+    if pom_filename not in os.listdir(os.getcwd()):
         raise Exception("the directory you are in does not contain a maven project")
     print("############## building project ##############")
-    compile_command = "mvn install -Dmaven.test.skip=true"
+    compile_command = "mvn compile -Dmaven.compiler.source=1.8 -Dmaven.compiler.target=1.8"
     p = subprocess.Popen(compile_command, shell=True,
                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     p.wait()
@@ -105,7 +162,7 @@ def build_project():
     return True
 
 
-def evaluate(testcase_root, testcase_name, output, pure_stderr):
+def evaluate(testcase_root, testcase_name, output):
     try:
         with open(os.path.join(testcase_root, testcase_name.split(testcase_extension)[0] + output_extension),
                   "r") as text_file:  # HYPO: file exists
@@ -114,10 +171,7 @@ def evaluate(testcase_root, testcase_name, output, pure_stderr):
         text_file.close()
     except OSError as e:
         expected = output
-    if testcase_name.startswith(fail_prefix) and pure_stderr is not None and len(pure_stderr) > 0:
-        print("TEST CASE PASSED!\n")
-        return True
-    elif expected != output:
+    if expected != output:
         print("TEST CASE FAILED!!!!!: ")
         print("EXPECTED:", expected)
         print("OUTPUT:", output)
@@ -128,38 +182,32 @@ def evaluate(testcase_root, testcase_name, output, pure_stderr):
         return True
 
 
-def decompress(code_root, compressed_code_name):
-    prev_path = cur_dir
-    os.chdir(code_root)
-    os.mkdir(temp_directory)
-    copyfile(os.path.join(code_root, compressed_code_name), os.path.join(temp_directory, compressed_code_name))
-    zip_ref = zipfile.ZipFile(os.path.join(code_root, compressed_code_name), 'r')
-    zip_ref.extractall(os.path.join(code_root, temp_directory))
-    zip_ref.close()
-    os.remove(os.path.join(temp_directory, compressed_code_name))
-    os.chdir(prev_path)
-    return os.path.join(code_root, temp_directory)
-
-
-def copy_files(cur_dir, files_to_copy):
-    for (root, dirs, files) in os.walk(cur_dir):
-        for file in files:
-            if file in files_to_copy:
-                copyfile(os.path.join(root, file), os.path.join(files_to_copy.get(file), file))
-
-
-def extract_and_copy_goals(code_root, compressed_code_name, files_to_copy):
-    try:
-        decompressed_code_location = decompress(code_root, compressed_code_name)
-    except OSError:
-        rmtree(os.path.join(code_root, temp_directory))
-        os.chdir(cur_dir)
+def decompress(directory, filename):
+    prev_path = os.getcwd()
+    os.chdir(directory)
+    if not os.path.isfile(os.path.join(filename)):
         raise Exception('this file name does not exist on code repo')
-    copy_files(decompressed_code_location, files_to_copy)
-    rmtree(os.path.join(code_root, decompressed_code_location))
+    os.mkdir(temp_directory)
+    copyfile(os.path.join(directory, filename), os.path.join(temp_directory, filename))
+    zip_ref = zipfile.ZipFile(os.path.join(directory, filename), 'r')
+    zip_ref.extractall(os.path.join(directory, temp_directory))
+    zip_ref.close()
+    os.remove(os.path.join(temp_directory, filename))
+    os.chdir(prev_path)
+    return os.path.join(directory, temp_directory)
 
 
-def execute_project(testcase_root, testcase_name):
+def copy_items_to_dest(cur_dir, items_to_copy):
+    for (root, dirs, files) in os.walk(cur_dir):
+        directory_key = os.path.basename(root)
+        if directory_key in items_to_copy['directories']:
+            shutil.copytree(root, os.path.join(items_to_copy['directories'].get(directory_key), directory_key))
+        for file in files:
+            if file in items_to_copy['files']:
+                copyfile(os.path.join(root, file), os.path.join(items_to_copy['files'].get(file), file))
+
+
+def execute_project(testcase_root, testcase_name, remove_whitespace=True):
     runner = runner_class
     run_command = "mvn -q exec:java -Dexec.mainClass=" + runner + " -Dexec.args=" + os.path.join(
         testcase_root, testcase_name)
@@ -167,8 +215,12 @@ def execute_project(testcase_root, testcase_name):
                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     p.wait()
     out, err = p.communicate()
-    output = str(out)[2: len(str(out)) - 1].replace("\\r\\n", "").replace("\\n", "").replace("\\t",
-                                                                                             "").replace(" ", "")
+    output = str(out)[
+             2: len(str(out)) - 1]
+    if remove_whitespace:
+        output = output.replace("\\r\\n", "").replace("\\n", "").replace("\\t", "").replace(" ", "")
+    else:
+        output = output.replace("\\r\\n", "\r\n").replace("\\n", "\n").replace("\\t", "\t")
     pure_output = output
     pure_stderr = str(err)[2: len(str(err)) - 1]
     return pure_output, pure_stderr
@@ -194,14 +246,14 @@ def begin_examination(sid_list, worksheet, version):
     if not compiled:
         save_result(worksheet, Grade.ERROR, sid_list)
     else:
-        for (testcase_root, testcase_dirs, testcase_files) in os.walk(testcases_folder):
+        for (testcase_root, testcase_dirs, testcase_files) in os.walk(testcases_dir):
             for testcase_name in testcase_files:
                 if testcase_name.endswith(testcase_extension):
                     print("############## running code with test case", testcase_name,
                           "is started  ##############\n")
                     pure_output, pure_stderr = execute_project(testcase_root, testcase_name, )
                     grade = Grade.FAULT
-                    if evaluate(testcase_root, testcase_name, pure_output, pure_stderr):
+                    if evaluate(testcase_root, testcase_name, pure_output):
                         grade = Grade.OK
                     save_result(worksheet, grade, sid_list, testcase_name, version)
     print("------------------------------------------------------------------------------------------------------\n\n")
@@ -213,20 +265,10 @@ def get_sids(code_name):
     return sid.split(separator)
 
 
-def remove_copied_files(files_to_copy):
-    for (root, dirs, files) in os.walk(project_dir):
-        for file in files:
-            if file in files_to_copy:
-                os.remove(os.path.join(root, file))
-
-
-def save_new_code_to(files_to_copy, dir, new_code_name):
-    prev_path = os.getcwd()
-    os.chdir(dir)
-    zip_file = zipfile.ZipFile(new_code_name, 'w')
-    for file in files_to_copy:
-        zip_file.write(os.path.join(files_to_copy.get(file), file), compress_type=zipfile.ZIP_DEFLATED)
-    os.chdir(prev_path)
+def save_new_code_to(project_dir, student_code_dir, new_code_name):
+    archive_address = shutil.make_archive(new_code_name, 'zip', project_dir)
+    copyfile(archive_address, os.path.join(student_code_dir, new_code_name + compressed_code_extension))
+    os.remove(archive_address)
 
 
 def get_num_of_runs_for_std(sids, worksheet):
@@ -239,15 +281,59 @@ def get_num_of_runs_for_std(sids, worksheet):
     return version
 
 
-def prepare_project(code_root, code_name, version, copy_from_source=True):
+def extract_code(code_dir, compressed_code_name):
+    return decompress(code_dir, compressed_code_name)
+
+
+def create_antlr_maven_project_in(project_dir):
+    try:
+        os.mkdir(project_dir)
+    except OSError:
+        pass
+    os.mkdir(os.path.join(project_dir, java_class_source_dir))
+    try:
+        os.mkdir(os.path.join(project_dir, grammar_source_dir))
+    except OSError:
+        pass
+    pom_file = open(os.path.join(project_dir, pom_filename), 'w+')
+    pom_file.write(pom_file_content)
+    pom_file.close()
+
+
+def extract_project_from_source(code_dir, code_name, version):
     _version = version
     if _version >= max_run_num:
         raise Exception("max number of runs exceeded")
     new_code_name = ('' if _version is 0 else (newer_version_sign + str(_version) + '_')) + code_name
-    if not (new_code_name in os.listdir(code_root) or (not copy_from_source)):
+    if not new_code_name in os.listdir(code_dir):
         raise Exception("version " + str(_version) + " of this code does not exist on repo")
-    if copy_from_source:
-        extract_and_copy_goals(code_root, new_code_name, files_to_copy)
+    decompressed_code_location = extract_code(code_dir, new_code_name)
+    project_pom_file_addresses = glob.glob(
+        os.path.join(os.path.join(decompressed_code_location, '**'), pom_filename), recursive=True)
+    if len(project_pom_file_addresses) != 0:
+        pom_file_dir_address = os.path.dirname(project_pom_file_addresses[0])
+        shutil.copytree(pom_file_dir_address, project_dir)
+    else:
+        create_antlr_maven_project_in(project_dir)
+        copy(runner_class_java_file, os.path.join(project_dir, java_class_source_dir))
+        copy_items_to_dest(decompressed_code_location, items_to_copy)
+    rmtree(os.path.join(code_dir, decompressed_code_location))
+
+
+def prepare_project(code_dir, code_name, version, copy_from_source):
+    if not copy_from_source:
+        no_project_found = False
+        if os.path.basename(project_dir) in os.listdir(base_dir):
+            if not pom_filename in os.listdir( project_dir ):
+                no_project_found = True
+                shutil.rmtree(project_dir)
+        else:
+            no_project_found = True
+        if no_project_found:
+            print("no project found to run, exiting")
+            exit(1)
+    else:
+        extract_project_from_source(code_dir, code_name, version)
 
 
 def examinate_group(worksheet, sids, version):
@@ -255,24 +341,28 @@ def examinate_group(worksheet, sids, version):
     clean_project_artifact()
 
 
-def do_examination_scenario(code_root, code_name, version, copy_from_source=True):
+def do_examination_scenario(worksheet, code_dir, code_name, version, copy_from_source=True):
     sids = get_sids(code_name)
     std_row = find_sid_index_in_sheet(worksheet, sids[0])
     run_col = find_col_index_in_sheet(worksheet, RUNSNUM)
     if std_row == -1:
         create_new_student(worksheet, sids)
-    prepare_project(code_root, code_name, version, copy_from_source)
+    prepare_project(code_dir, code_name, version, copy_from_source)
+    _version = version
     if not copy_from_source:
-        saved_code_name = code_name if version == 0 else newer_version_sign + str(version) + '_' + code_name
-        save_new_code_to(files_to_copy, code_root, saved_code_name)
-    examinate_group(worksheet, sids, version)
-    remove_copied_files(files_to_copy)
+        _version = get_num_of_runs_for_std(sids, worksheet)
+    examinate_group(worksheet, sids, _version)
+    new_code_name = (code_name if _version == 0
+                     else newer_version_sign + str(_version) + "_" + separator.join(sids))
+    if not copy_from_source:
+        save_new_code_to(project_dir, code_dir, new_code_name)
+    shutil.rmtree(project_dir)
     worksheet.cell(std_row, run_col).value = worksheet.cell(std_row, run_col).value + 1
 
 
 def examinate_all(worksheet, version=None):
     recent_students = set({})
-    code_dir = codes_folder
+    code_dir = codes_dir
     for (code_root, codeDirs, code_files) in os.walk(code_dir):
         for code_name in code_files:
             if code_name.endswith(compressed_code_extension) and not code_name.startswith(newer_version_sign):
@@ -282,12 +372,12 @@ def examinate_all(worksheet, version=None):
                     try:
                         if version is None:
                             version = get_num_of_runs_for_std(sids, worksheet)
-                        do_examination_scenario(code_root, code_name, version)
+                        do_examination_scenario(worksheet, code_root, code_name, version)
                     except Exception as exception:
                         print(exception)
 
 
-def try_test(code_root, code_name, version, copy_from_source, test_id):
+def try_test(code_dir, code_name, version, test_id, copy_from_source=True):
     testcase_root = ""
     testcase_name = ""
     try:
@@ -295,26 +385,22 @@ def try_test(code_root, code_name, version, copy_from_source, test_id):
         testcase_position = list(tests_csv_file['id']).index(test_id)
         testcase_root = tests_csv_file['testcase_dir'][testcase_position]
         testcase_name = tests_csv_file['testcase_name'][testcase_position]
-    except Exception as exception:
+    except Exception:
         print('there is a problem in tests')
         exit(1)
-
-    prepare_project(code_root, code_name, version, copy_from_source)
+    prepare_project(code_dir, code_name, version, copy_from_source)
     prev_path = os.getcwd()
     os.chdir(project_dir)
     compiled = build_project()
     if compiled:
-        pure_output, pure_stderr = execute_project(testcase_root, testcase_name + testcase_extension)
+        pure_output, pure_stderr = execute_project(testcase_root, testcase_name + testcase_extension, False)
         print('OUTPUT OF YOUR TEST IS', pure_output)
-        print('STDERR OF YOUR TEST IS', pure_stderr)
         clean_project_artifact()
-    if copy_from_source:
-        remove_copied_files(files_to_copy)
     os.chdir(prev_path)
 
 
 def find_sid_code_name(sids):
-    for (code_root, codeDirs, code_files) in os.walk(codes_folder):
+    for (code_root, codeDirs, code_files) in os.walk(codes_dir):
         for code_name in code_files:
             filename_list = [separator.join(list(element)) + compressed_code_extension for element in
                              list(itertools.permutations(sids))]
@@ -329,11 +415,11 @@ def create_default_row():
     row1.extend([COMPILED, RUNSNUM])
     row2 = ["810199XXX" for i in range(NUMOFSTUDENTS)]
     row2.extend(["No", 0])
-    for (testcase_root, testcase_dirs, testcase_files) in os.walk(testcases_folder):
+    for (testcase_root, testcase_dirs, testcase_files) in os.walk(testcases_dir):
         for testcase_name in testcase_files:
             if testcase_name.endswith(testcase_extension):
-                testCase = testcase_name.split(testcase_extension)[0]
-                row1.append(testCase)
+                pure_testcase_name = testcase_name.split(testcase_extension)[0]
+                row1.append(pure_testcase_name)
                 row2.append(0)
     return [row1, row2]
 
@@ -360,22 +446,22 @@ def parse_run_command(command, worksheet, excel_name):
         if len(sids) <= 0:
             print("you must enter at least one sid")
             return
-        copy_from_source = False
-        if '-noCopyFromSource' not in command:
-            copy_from_source = True
-        group_code_folder, code_name = find_sid_code_name(sids)
-        if group_code_folder is None or code_name is None:
+        group_code_dir, code_name = find_sid_code_name(sids)
+        if group_code_dir is None or code_name is None:
             print('no code with such student-ids')
             return
+        copy_from_source = True
+        if '-noCopyFromSource' in command:
+            copy_from_source = False
         sids = get_sids(code_name)
         try:
             version = get_num_of_runs_for_std(sids, worksheet)
             if '-try' in command:
                 print("enter test id :")
                 test_id = int(input())
-                try_test(group_code_folder, code_name, version - 1, copy_from_source, test_id)
+                try_test(group_code_dir, code_name, version - 1, test_id, copy_from_source)
             else:
-                do_examination_scenario(group_code_folder, code_name, version, copy_from_source)
+                do_examination_scenario(worksheet, group_code_dir, code_name, version, copy_from_source)
         except Exception as exception:
             print(exception)
     else:
@@ -384,11 +470,11 @@ def parse_run_command(command, worksheet, excel_name):
 
 
 def is_there_any_change_in_testcases_dir(testcase_mapper_columns):
-    if testcase_mapper_filename in os.listdir(cur_dir):
+    if testcase_mapper_filename in os.listdir(base_dir):
         cur_testcases_name = set({})
         tests_csv_file = pandas.read_csv(testcase_mapper_filename)
         if set(testcase_mapper_columns) == set(tests_csv_file.columns):
-            for (root, dirs, files) in os.walk(testcases_folder):
+            for (root, dirs, files) in os.walk(testcases_dir):
                 for test_file in files:
                     if test_file.endswith(testcase_extension):
                         cur_testcases_name.add(test_file)
@@ -404,7 +490,7 @@ def number_tests():
     testcase_mapper = {'id': [], 'testcase_dir': [], 'testcase_name': []}
     change_detected = is_there_any_change_in_testcases_dir({'id', 'testcase_dir', 'testcase_name'})
     if change_detected:
-        for (test_dir, test_dirs, test_files) in os.walk(testcases_folder):
+        for (test_dir, test_dirs, test_files) in os.walk(testcases_dir):
             for test_file in test_files:
                 if test_file.endswith(testcase_extension):
                     test_id += 1
@@ -412,10 +498,9 @@ def number_tests():
                     new_testcase_name = testcase_name + '_' + str(test_id)
                     os.rename(os.path.join(test_dir, test_file),
                               os.path.join(test_dir, new_testcase_name + testcase_extension))
-                    if not testcase_name.startswith(fail_prefix):
-                        output_name = testcase_name + output_extension
-                        new_output_name = new_testcase_name + output_extension
-                        os.rename(os.path.join(test_dir, output_name), os.path.join(test_dir, new_output_name))
+                    output_name = testcase_name + output_extension
+                    new_output_name = new_testcase_name + output_extension
+                    os.rename(os.path.join(test_dir, output_name), os.path.join(test_dir, new_output_name))
                     testcase_mapper.get('id').append(test_id)
                     testcase_mapper.get('testcase_dir').append(test_dir)
                     testcase_mapper.get('testcase_name').append(new_testcase_name)
@@ -423,25 +508,16 @@ def number_tests():
         dataframe.to_csv(testcase_mapper_filename, index=None, header=True)
 
 
-def correct_testcases_file_structure_and_format():
+def check_for_testcases_format():
     test_id = 0
     try:
-        for (test_root, test_dirs, test_files) in os.walk(testcases_folder):
+        for (test_root, test_dirs, test_files) in os.walk(testcases_dir):
             for test_file in test_files:
                 if test_file.endswith(testcase_extension):
                     test_id += 1
-                    testcase_name = test_file.split(testcase_extension)[0]
-                    if not testcase_name.startswith(fail_prefix):
-                        if testcase_name + output_extension not in os.listdir(test_root):
-                            raise Exception(
-                                'test file with name ' + test_file + ' must be passed but its output is missing')
-                        if not testcase_name.startswith(pass_prefix):
-                            new_test_name = pass_prefix + testcase_name
-                            new_output_file_name = new_test_name + output_extension
-                            os.rename(os.path.join(test_root, test_file),
-                                      os.path.join(test_root, new_test_name + testcase_extension))
-                            os.rename(os.path.join(test_root, testcase_name + output_extension),
-                                      os.path.join(test_root, new_output_file_name))
+                if test_file not in os.listdir(test_root):
+                    raise Exception(
+                        'test file with name ' + test_file + '\'s output is missing')
     except Exception as exception:
         print(exception)
         exit(1)
@@ -454,18 +530,9 @@ def list_testcases(prefix=None):
         columns=['testcase_name']))
 
 
-def parse_list_testcases(command):
-    if '-fail' in command:
-        list_testcases(fail_prefix)
-    elif '-pass' in command:
-        list_testcases(pass_prefix)
-    else:
-        list_testcases()
-
-
 def remove_duplicate_codes():
     recent_students = set({})
-    code_dir = codes_folder
+    code_dir = codes_dir
     for (code_root, codeDirs, code_files) in os.walk(code_dir):
         for code_name in code_files:
             if code_name.endswith(compressed_code_extension) and not code_name.startswith(newer_version_sign):
@@ -478,7 +545,7 @@ def remove_duplicate_codes():
 
 def list_groups():
     group_id = 0
-    code_dir = codes_folder
+    code_dir = codes_dir
     for (code_root, codeDirs, code_files) in os.walk(code_dir):
         for code_name in code_files:
             if code_name.endswith(compressed_code_extension) and not code_name.startswith(newer_version_sign):
@@ -487,22 +554,34 @@ def list_groups():
                 print('group', group_id, ':', ' , '.join(sids))
 
 
+def check_for_prerequisites():
+    if os.path.basename(testcases_dir) not in os.listdir(base_dir) or not os.path.isdir(testcases_dir):
+        raise Exception('There are no test cases in your system')
+    elif os.path.basename(codes_dir) not in os.listdir(base_dir) or not os.path.isdir(codes_dir):
+        raise Exception('There are not codes in your system to test')
+    elif runner_class_java_file not in os.listdir(base_dir) or not os.path.isfile(runner_class_java_file):
+        raise Exception('There is no runner class to copy to projects')
+
+
 if __name__ == "__main__":
-    correct_testcases_file_structure_and_format()
+    check_for_prerequisites()
+    check_for_testcases_format()
     remove_duplicate_codes()
     excel_name = "Grades"
     excel_file_name = excel_name + excel_extension
     worksheet, workbook = create_excel(excel_file_name)
     workbook.save(excel_file_name)
-    help = "run( or r as shorthand command ): runs tests for all codes located in codes folder which is hard coded \n\t " \
-           + "option single : runs tests for one code, it runs the test on the living code coming with -noCopyFromSource" \
-           + " and if it comes with -try it just runs a test after getting its id" \
+    help = "run( or r as shorthand command ): runs tests for all codes located in codes directory which is hard coded " \
+           "\n\t " \
+           + "option single : runs tests for one code,if it comes with -noCopyFromSource, it tests the living code on " \
+             "project dir," \
+           + "if it comes with -try it just runs a test after getting its id" \
            + "\nhelp( h ) : prints this manual\n" \
            + "exit: termination of cli\n" \
-           + "list_tests: lists all tests available in test case folder with name, if it comes with" \
+           + "list_tests: lists all tests available in test case directory with name, if it comes with" \
              " -fail , it only lists testcases which lead to failure and if it comes with -pass" \
              "it only lists testcases that must be passed\n\n" \
-           + "list_groups: list all gropus who sent you code\n\n"
+           + "list_groups: list all groups who sent you code\n\n"
     while True:
         print('>>>>>', end=" ")
         command = str(input())
@@ -514,7 +593,7 @@ if __name__ == "__main__":
         elif command == 'help' or command == 'h':
             print(help)
         elif command.startswith('list_tests'):
-            parse_list_testcases(command)
+            list_testcases()
         elif command.startswith('list_groups'):
             list_groups()
         else:
