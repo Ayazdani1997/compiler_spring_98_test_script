@@ -4,6 +4,7 @@ import os
 import shutil
 import subprocess
 import zipfile
+import signal
 from enum import Enum
 from pandas import *
 
@@ -27,6 +28,7 @@ separator = '_'
 temp_directory = 'temp'
 NUMOFSTUDENTS = 2
 loss_rate = 0.2
+default_timeout = 30
 RUNSNUM = "#run"
 newer_version_sign = '$'
 testcase_mapper_filename = "testcases.csv"
@@ -101,6 +103,11 @@ class Grade(Enum):
     OK = FULL_TESTCASE_GRADE
 
 
+class TimeOutException(Exception):
+    def __str__(self):
+        return "timeout occurred"
+
+
 def create_new_student(worksheet, sid_list):
     row = ([0 for i in range(worksheet.max_column)])
     for i in range(len(sid_list)):
@@ -147,6 +154,8 @@ def save_result(worksheet, grade, sid_list, test_case_name=None, version=0):
 
 
 def build_project():
+    prev_path = os.getcwd()
+    os.chdir(project_dir)
     if pom_filename not in os.listdir(os.getcwd()):
         raise Exception("the directory you are in does not contain a maven project")
     print("############## building project ##############")
@@ -159,6 +168,7 @@ def build_project():
         print("############## code has compile error ##############")
         return False
     print("############## building done successfully ##############\n")
+    os.chdir(prev_path)
     return True
 
 
@@ -207,7 +217,13 @@ def copy_items_to_dest(cur_dir, items_to_copy):
                 copyfile(os.path.join(root, file), os.path.join(items_to_copy['files'].get(file), file))
 
 
+def handle_run_timeout(signum, frame):
+    raise TimeOutException()
+
+
 def execute_project(testcase_root, testcase_name, remove_whitespace=True):
+    prev_path = os.getcwd()
+    os.chdir(project_dir)
     runner = runner_class
     run_command = "mvn -q exec:java -Dexec.mainClass=" + runner + " -Dexec.args=" + os.path.join(
         testcase_root, testcase_name)
@@ -223,6 +239,7 @@ def execute_project(testcase_root, testcase_name, remove_whitespace=True):
         output = output.replace("\\r\\n", "\r\n").replace("\\n", "\n").replace("\\t", "\t")
     pure_output = output
     pure_stderr = str(err)[2: len(str(err)) - 1]
+    os.chdir(prev_path)
     return pure_output, pure_stderr
 
 
@@ -238,26 +255,32 @@ def clean_project_artifact():
     print("############ end of cleaning project #############")
 
 
-def begin_examination(sid_list, worksheet, version):
-    prev_path = os.getcwd()
-    os.chdir(project_dir)
-    print("--------------------------------- group ", ','.join(sid_list), "-------------------------------------")
-    compiled = build_project()
-    if not compiled:
-        save_result(worksheet, Grade.ERROR, sid_list)
-    else:
-        for (testcase_root, testcase_dirs, testcase_files) in os.walk(testcases_dir):
-            for testcase_name in testcase_files:
-                if testcase_name.endswith(testcase_extension):
-                    print("############## running code with test case", testcase_name,
-                          "is started  ##############\n")
-                    pure_output, pure_stderr = execute_project(testcase_root, testcase_name, )
-                    grade = Grade.FAULT
+def run(testcase_dir, testcase_name, remove_whitespace=True):
+    print("############## running code with test case", testcase_name,
+          "is started  ##############\n")
+    signal.signal(signal.SIGALRM, handle_run_timeout)
+    signal.alarm(default_timeout)
+    pure_output, pure_stderr = execute_project(testcase_dir, testcase_name, remove_whitespace)
+    signal.alarm(0)
+    print("------------------------------------------------------------------------------------------------------\n\n")
+    return pure_output, pure_stderr
+
+
+def test_group_project(worksheet, sids, version):
+    for (testcase_root, testcase_dirs, testcase_files) in os.walk(testcases_dir):
+        for testcase_name in testcase_files:
+            if testcase_name.endswith(testcase_extension):
+                grade = Grade.FAULT
+                try:
+                    pure_output, pure_stderr = run(testcase_root, testcase_name)
                     if evaluate(testcase_root, testcase_name, pure_output):
                         grade = Grade.OK
-                    save_result(worksheet, grade, sid_list, testcase_name, version)
-    print("------------------------------------------------------------------------------------------------------\n\n")
-    os.chdir(prev_path)
+                    save_result(worksheet, grade, sids, testcase_name, version)
+                except TimeOutException as timeOutException:
+                    print(timeOutException)
+                    save_result(worksheet, grade, sids, testcase_name, version)
+                    continue
+    clean_project_artifact()
 
 
 def get_sids(code_name):
@@ -301,6 +324,7 @@ def create_antlr_maven_project_in(project_dir):
 
 
 def extract_project_from_source(code_dir, code_name, version):
+    maven_project_detected = True
     _version = version
     if _version >= max_run_num:
         raise Exception("max number of runs exceeded")
@@ -312,19 +336,25 @@ def extract_project_from_source(code_dir, code_name, version):
         os.path.join(os.path.join(decompressed_code_location, '**'), pom_filename), recursive=True)
     if len(project_pom_file_addresses) != 0:
         pom_file_dir_address = os.path.dirname(project_pom_file_addresses[0])
+        try:
+            shutil.rmtree(project_dir)
+        except OSError:
+            pass
         shutil.copytree(pom_file_dir_address, project_dir)
     else:
+        maven_project_detected = False
         create_antlr_maven_project_in(project_dir)
         copy(runner_class_java_file, os.path.join(project_dir, java_class_source_dir))
         copy_items_to_dest(decompressed_code_location, items_to_copy)
     rmtree(os.path.join(code_dir, decompressed_code_location))
+    return maven_project_detected
 
 
 def prepare_project(code_dir, code_name, version, copy_from_source):
     if not copy_from_source:
         no_project_found = False
         if os.path.basename(project_dir) in os.listdir(base_dir):
-            if not pom_filename in os.listdir( project_dir ):
+            if not pom_filename in os.listdir(project_dir):
                 no_project_found = True
                 shutil.rmtree(project_dir)
         else:
@@ -332,35 +362,37 @@ def prepare_project(code_dir, code_name, version, copy_from_source):
         if no_project_found:
             print("no project found to run, exiting")
             exit(1)
+        return True
     else:
-        extract_project_from_source(code_dir, code_name, version)
+        return extract_project_from_source(code_dir, code_name, version)
 
 
-def examinate_group(worksheet, sids, version):
-    begin_examination(sids, worksheet, version)
-    clean_project_artifact()
-
-
-def do_examination_scenario(worksheet, code_dir, code_name, version, copy_from_source=True):
+def do_test_scenario(worksheet, code_dir, code_name, version, copy_from_source=True):
     sids = get_sids(code_name)
     std_row = find_sid_index_in_sheet(worksheet, sids[0])
     run_col = find_col_index_in_sheet(worksheet, RUNSNUM)
     if std_row == -1:
         create_new_student(worksheet, sids)
-    prepare_project(code_dir, code_name, version, copy_from_source)
+    maven_project_detected = prepare_project(code_dir, code_name, version, copy_from_source)
     _version = version
     if not copy_from_source:
         _version = get_num_of_runs_for_std(sids, worksheet)
-    examinate_group(worksheet, sids, _version)
-    new_code_name = (code_name if _version == 0
-                     else newer_version_sign + str(_version) + "_" + separator.join(sids))
+    print("--------------------------------- group ", ','.join(sids), "-------------------------------------")
+    compiled = build_project()
+    if not compiled:
+        save_result(worksheet, Grade.ERROR, sids)
+    else:
+        test_group_project(worksheet, sids, _version)
+    first_version_pure_name = separator.join(sids)
+    new_pure_code_name = (first_version_pure_name if _version == 0
+                          else newer_version_sign + str(_version) + "_" + first_version_pure_name)
     if not copy_from_source:
-        save_new_code_to(project_dir, code_dir, new_code_name)
+        save_new_code_to(project_dir, code_dir, new_pure_code_name)
     shutil.rmtree(project_dir)
     worksheet.cell(std_row, run_col).value = worksheet.cell(std_row, run_col).value + 1
 
 
-def examinate_all(worksheet, version=None):
+def test_all(worksheet, version=None):
     recent_students = set({})
     code_dir = codes_dir
     for (code_root, codeDirs, code_files) in os.walk(code_dir):
@@ -372,7 +404,7 @@ def examinate_all(worksheet, version=None):
                     try:
                         if version is None:
                             version = get_num_of_runs_for_std(sids, worksheet)
-                        do_examination_scenario(worksheet, code_root, code_name, version)
+                        do_test_scenario(worksheet, code_root, code_name, version)
                     except Exception as exception:
                         print(exception)
 
@@ -389,14 +421,15 @@ def try_test(code_dir, code_name, version, test_id, copy_from_source=True):
         print('there is a problem in tests')
         exit(1)
     prepare_project(code_dir, code_name, version, copy_from_source)
-    prev_path = os.getcwd()
-    os.chdir(project_dir)
     compiled = build_project()
     if compiled:
-        pure_output, pure_stderr = execute_project(testcase_root, testcase_name + testcase_extension, False)
-        print('OUTPUT OF YOUR TEST IS', pure_output)
-        clean_project_artifact()
-    os.chdir(prev_path)
+        try:
+            pure_output, pure_stderr = run(testcase_root, testcase_name, False)
+            print('OUTPUT OF YOUR TEST IS: \n', pure_output)
+        except TimeOutException as timeOutException:
+            print(timeOutException)
+        finally:
+            clean_project_artifact()
 
 
 def find_sid_code_name(sids):
@@ -439,36 +472,6 @@ def create_excel(excel_name):
     return worksheet, workbook
 
 
-def parse_run_command(command, worksheet, excel_name):
-    if '-single' in command:
-        print("enter sids : ")
-        sids = input().split()
-        if len(sids) <= 0:
-            print("you must enter at least one sid")
-            return
-        group_code_dir, code_name = find_sid_code_name(sids)
-        if group_code_dir is None or code_name is None:
-            print('no code with such student-ids')
-            return
-        copy_from_source = True
-        if '-noCopyFromSource' in command:
-            copy_from_source = False
-        sids = get_sids(code_name)
-        try:
-            version = get_num_of_runs_for_std(sids, worksheet)
-            if '-try' in command:
-                print("enter test id :")
-                test_id = int(input())
-                try_test(group_code_dir, code_name, version - 1, test_id, copy_from_source)
-            else:
-                do_examination_scenario(worksheet, group_code_dir, code_name, version, copy_from_source)
-        except Exception as exception:
-            print(exception)
-    else:
-        examinate_all(worksheet)
-    workbook.save(excel_name)
-
-
 def is_there_any_change_in_testcases_dir(testcase_mapper_columns):
     if testcase_mapper_filename in os.listdir(base_dir):
         cur_testcases_name = set({})
@@ -479,7 +482,7 @@ def is_there_any_change_in_testcases_dir(testcase_mapper_columns):
                     if test_file.endswith(testcase_extension):
                         cur_testcases_name.add(test_file)
             csv_tests_name = set(
-                {testcase_name + testcase_extension for testcase_name in tests_csv_file['testcase_name']})
+                {testcase_name for testcase_name in tests_csv_file['testcase_name']})
             if cur_testcases_name == csv_tests_name:
                 return False
     return True
@@ -495,7 +498,7 @@ def number_tests():
                 if test_file.endswith(testcase_extension):
                     test_id += 1
                     testcase_name = test_file.split(testcase_extension)[0]
-                    new_testcase_name = testcase_name + '_' + str(test_id)
+                    new_testcase_name = str(test_id) + '_' + testcase_name
                     os.rename(os.path.join(test_dir, test_file),
                               os.path.join(test_dir, new_testcase_name + testcase_extension))
                     output_name = testcase_name + output_extension
@@ -503,7 +506,7 @@ def number_tests():
                     os.rename(os.path.join(test_dir, output_name), os.path.join(test_dir, new_output_name))
                     testcase_mapper.get('id').append(test_id)
                     testcase_mapper.get('testcase_dir').append(test_dir)
-                    testcase_mapper.get('testcase_name').append(new_testcase_name)
+                    testcase_mapper.get('testcase_name').append(new_testcase_name + testcase_extension)
         dataframe = DataFrame(testcase_mapper, columns=['id', 'testcase_dir', 'testcase_name'])
         dataframe.to_csv(testcase_mapper_filename, index=None, header=True)
 
@@ -523,7 +526,7 @@ def check_for_testcases_format():
         exit(1)
 
 
-def list_testcases(prefix=None):
+def list_tests(prefix=None):
     testcases = pandas.read_csv(testcase_mapper_filename, header=0)
     print(DataFrame(
         [testcase for testcase in testcases['testcase_name'] if prefix is None or testcase.startswith(prefix)],
@@ -563,6 +566,54 @@ def check_for_prerequisites():
         raise Exception('There is no runner class to copy to projects')
 
 
+def parse_run_command(command):
+    print("enter sids : ")
+    sids = input().split()
+    if len(sids) <= 0:
+        print("you must enter at least one sid")
+        return
+    group_code_dir, code_name = find_sid_code_name(sids)
+    if group_code_dir is None or code_name is None:
+        print('no code with such student-ids')
+        return
+    copy_from_source = True
+    if '-noCopyFromSource' in command:
+        copy_from_source = False
+    sids = get_sids(code_name)
+    print("enter test id :")
+    test_id = int(input())
+    try:
+        version = get_num_of_runs_for_std(sids, worksheet)
+        try_test(group_code_dir, code_name, (version - 1 if version > 0 else 0), test_id, copy_from_source)
+    except Exception as exception:
+        print(exception)
+
+
+def parse_test_command(command, worksheet, excel_name):
+    if '-single' in command:
+        print("enter sids : ")
+        sids = input().split()
+        if len(sids) <= 0:
+            print("you must enter at least one sid")
+            return
+        group_code_dir, code_name = find_sid_code_name(sids)
+        if group_code_dir is None or code_name is None:
+            print('no code with such student-ids')
+            return
+        copy_from_source = True
+        if '-noCopyFromSource' in command:
+            copy_from_source = False
+        sids = get_sids(code_name)
+        try:
+            version = get_num_of_runs_for_std(sids, worksheet)
+            do_test_scenario(worksheet, group_code_dir, code_name, version, copy_from_source)
+        except Exception as exception:
+            print(exception)
+    else:
+        test_all(worksheet)
+    workbook.save(excel_name)
+
+
 if __name__ == "__main__":
     check_for_prerequisites()
     check_for_testcases_format()
@@ -571,16 +622,16 @@ if __name__ == "__main__":
     excel_file_name = excel_name + excel_extension
     worksheet, workbook = create_excel(excel_file_name)
     workbook.save(excel_file_name)
-    help = "run( or r as shorthand command ): runs tests for all codes located in codes directory which is hard coded " \
+    help = "Commands: \n\n" \
+           "test: tests all codes located in codes directory which is hard coded " \
            "\n\t " \
            + "option single : runs tests for one code,if it comes with -noCopyFromSource, it tests the living code on " \
-             "project dir," \
-           + "if it comes with -try it just runs a test after getting its id" \
+             "project dir\n\n" \
+           + "run( r ): it just runs a test for a group after getting test id and student ids, if it comes with " \
+             "-noCopyFromSource it runs the living code on project_dir" \
            + "\nhelp( h ) : prints this manual\n" \
            + "exit: termination of cli\n" \
-           + "list_tests: lists all tests available in test case directory with name, if it comes with" \
-             " -fail , it only lists testcases which lead to failure and if it comes with -pass" \
-             "it only lists testcases that must be passed\n\n" \
+           + "list_tests: lists all tests available in test case directory with name" \
            + "list_groups: list all groups who sent you code\n\n"
     while True:
         print('>>>>>', end=" ")
@@ -589,11 +640,13 @@ if __name__ == "__main__":
             print("######### bye , see you soon! #########")
             break
         elif command.startswith('run') or command.startswith('r'):
-            parse_run_command(command, worksheet, excel_file_name)
+            parse_run_command(command)
+        elif command.startswith('test'):
+            parse_test_command(command, worksheet, excel_file_name)
         elif command == 'help' or command == 'h':
             print(help)
         elif command.startswith('list_tests'):
-            list_testcases()
+            list_tests()
         elif command.startswith('list_groups'):
             list_groups()
         else:
