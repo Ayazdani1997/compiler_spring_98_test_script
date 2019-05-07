@@ -30,6 +30,7 @@ NUMOFSTUDENTS = 2
 loss_rate = 0.2
 default_timeout = 30
 RUNSNUM = "#run"
+USAGE_OF_MAVEN = "usage_of_maven"
 newer_version_sign = '$'
 testcase_mapper_filename = "testcases.csv"
 compressed_code_extension = ".zip"
@@ -105,13 +106,17 @@ class Grade(Enum):
 
 class TimeOutException(Exception):
     def __str__(self):
-        return "timeout occurred"
+        return "TIMEOUT OCCURRED!!!"
 
 
 def create_new_student(worksheet, sid_list):
     row = ([0 for i in range(worksheet.max_column)])
     for i in range(len(sid_list)):
         row[i] = sid_list[i]
+    usage_of_maven_index = find_col_index_in_sheet(worksheet, USAGE_OF_MAVEN)
+    compiled_index = find_col_index_in_sheet(worksheet, COMPILED)
+    row[compiled_index - 1] = "No"
+    row[usage_of_maven_index - 1] = "No"
     return row
 
 
@@ -221,16 +226,7 @@ def handle_run_timeout(signum, frame):
     raise TimeOutException()
 
 
-def execute_project(testcase_root, testcase_name, remove_whitespace=True):
-    prev_path = os.getcwd()
-    os.chdir(project_dir)
-    runner = runner_class
-    run_command = "mvn -q exec:java -Dexec.mainClass=" + runner + " -Dexec.args=" + os.path.join(
-        testcase_root, testcase_name)
-    p = subprocess.Popen(run_command, shell=True,
-                         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    p.wait()
-    out, err = p.communicate()
+def purify_result(out, err, remove_whitespace=True):
     output = str(out)[
              2: len(str(out)) - 1]
     if remove_whitespace:
@@ -239,6 +235,27 @@ def execute_project(testcase_root, testcase_name, remove_whitespace=True):
         output = output.replace("\\r\\n", "\r\n").replace("\\n", "\n").replace("\\t", "\t")
     pure_output = output
     pure_stderr = str(err)[2: len(str(err)) - 1]
+    return pure_output, pure_stderr
+
+
+def execute_project(testcase_root, testcase_name, remove_whitespace=True):
+    prev_path = os.getcwd()
+    os.chdir(project_dir)
+    runner = runner_class
+    run_command = "mvn -q exec:java -Dexec.mainClass=" + runner + " -Dexec.args=" + os.path.join(
+        testcase_root, testcase_name)
+    p = subprocess.Popen(run_command, shell=True,
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    signal.signal(signal.SIGALRM, handle_run_timeout)
+    signal.alarm(default_timeout)
+    try:
+        p.wait()
+        signal.alarm(0)
+    except TimeOutException as timeOutException:
+        print(timeOutException)
+        raise TimeOutException()
+    out, err = p.communicate()
+    pure_output, pure_stderr = purify_result(out, err, remove_whitespace)
     os.chdir(prev_path)
     return pure_output, pure_stderr
 
@@ -258,11 +275,7 @@ def clean_project_artifact():
 def run(testcase_dir, testcase_name, remove_whitespace=True):
     print("############## running code with test case", testcase_name,
           "is started  ##############\n")
-    signal.signal(signal.SIGALRM, handle_run_timeout)
-    signal.alarm(default_timeout)
     pure_output, pure_stderr = execute_project(testcase_dir, testcase_name, remove_whitespace)
-    signal.alarm(0)
-    print("------------------------------------------------------------------------------------------------------\n\n")
     return pure_output, pure_stderr
 
 
@@ -276,10 +289,8 @@ def test_group_project(worksheet, sids, version):
                     if evaluate(testcase_root, testcase_name, pure_output):
                         grade = Grade.OK
                     save_result(worksheet, grade, sids, testcase_name, version)
-                except TimeOutException as timeOutException:
-                    print(timeOutException)
+                except TimeOutException:
                     save_result(worksheet, grade, sids, testcase_name, version)
-                    continue
     clean_project_artifact()
 
 
@@ -372,11 +383,17 @@ def do_test_scenario(worksheet, code_dir, code_name, version, copy_from_source=T
     std_row = find_sid_index_in_sheet(worksheet, sids[0])
     run_col = find_col_index_in_sheet(worksheet, RUNSNUM)
     if std_row == -1:
-        create_new_student(worksheet, sids)
+        worksheet.append(create_new_student(worksheet, sids))
+        std_row = find_sid_index_in_sheet(worksheet, sids[0])
     maven_project_detected = prepare_project(code_dir, code_name, version, copy_from_source)
     _version = version
     if not copy_from_source:
         _version = get_num_of_runs_for_std(sids, worksheet)
+    else:
+        if version == 0:
+            worksheet.cell(std_row, find_col_index_in_sheet(worksheet,
+                                                            USAGE_OF_MAVEN)).value = "Yes" if maven_project_detected else "No"
+
     print("--------------------------------- group ", ','.join(sids), "-------------------------------------")
     compiled = build_project()
     if not compiled:
@@ -402,9 +419,10 @@ def test_all(worksheet, version=None):
                 if len(set(sids) & recent_students) is 0:
                     recent_students |= set(sids)
                     try:
+                        _version = version
                         if version is None:
-                            version = get_num_of_runs_for_std(sids, worksheet)
-                        do_test_scenario(worksheet, code_root, code_name, version)
+                            _version = get_num_of_runs_for_std(sids, worksheet)
+                        do_test_scenario(worksheet, code_root, code_name, _version)
                     except Exception as exception:
                         print(exception)
 
@@ -426,8 +444,8 @@ def try_test(code_dir, code_name, version, test_id, copy_from_source=True):
         try:
             pure_output, pure_stderr = run(testcase_root, testcase_name, False)
             print('OUTPUT OF YOUR TEST IS: \n', pure_output)
-        except TimeOutException as timeOutException:
-            print(timeOutException)
+        except TimeOutException:
+            pass
         finally:
             clean_project_artifact()
 
@@ -445,9 +463,9 @@ def find_sid_code_name(sids):
 
 def create_default_row():
     row1 = [('sid' + str(i + 1)) for i in range(NUMOFSTUDENTS)]
-    row1.extend([COMPILED, RUNSNUM])
+    row1.extend([COMPILED, USAGE_OF_MAVEN, RUNSNUM])
     row2 = ["810199XXX" for i in range(NUMOFSTUDENTS)]
-    row2.extend(["No", 0])
+    row2.extend(["Yes", "Yes", 0])
     for (testcase_root, testcase_dirs, testcase_files) in os.walk(testcases_dir):
         for testcase_name in testcase_files:
             if testcase_name.endswith(testcase_extension):
