@@ -27,8 +27,8 @@ output_extension = ".out"
 separator = '_'
 temp_directory = 'temp'
 NUMOFSTUDENTS = 2
-loss_rate = 0.2
-default_timeout = 20
+version_loss_rate = 0.2
+default_timeout_in_secs = 10
 RUNSNUM = "#run"
 USAGE_OF_MAVEN = "usage_of_maven"
 newer_version_sign = '$'
@@ -143,7 +143,7 @@ def grade_students(worksheet, test_case_name, grade, sid_list, version=0):
     row = find_sid_index_in_sheet(worksheet, sid_list[0])
     if grade == grade.OK:
         if worksheet.cell(row, col).value == 0:
-            worksheet.cell(row, col).value = FULL_TESTCASE_GRADE - loss_rate * version
+            worksheet.cell(row, col).value = FULL_TESTCASE_GRADE - version_loss_rate * version
 
 
 def save_result(worksheet, grade, sid_list, test_case_name=None, version=0):
@@ -188,13 +188,10 @@ def evaluate(testcase_root, testcase_name, output):
     except OSError as e:
         expected = output
     if expected != output:
-        print("TEST CASE FAILED!!!!!: ")
-        print("EXPECTED:", expected)
-        print("OUTPUT:", output)
-        print("\n\n")
+        print("TEST CASE", testcase_name, "FAILED!!!!!:\nEXPECTED:", expected, "\nOUTPUT:", output + "\n\n")
         return False
     else:
-        print("TEST CASE PASSED!\n")
+        print("TEST CASE", testcase_name, "PASSED!\n\n")
         return True
 
 
@@ -253,29 +250,17 @@ def execute_project(testcase_root, testcase_name, remove_whitespace=True):
                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     os.chdir(prev_path)
     signal.signal(signal.SIGALRM, handle_run_timeout)
-    signal.alarm(default_timeout)
+    signal.alarm(default_timeout_in_secs)
     try:
         p.wait()
-        p.kill()
         signal.alarm(0)
     except TimeOutException as timeOutException:
+        p.kill()
         print(timeOutException)
         raise TimeOutException()
     out, err = p.communicate()
     pure_output, pure_stderr = purify_result(out, err, remove_whitespace)
     return pure_output, pure_stderr
-
-
-def clean_project_artifact():
-    print("############ cleaning project #############")
-    prev_path = os.getcwd()
-    os.chdir(project_dir)
-    clean_command = "mvn clean"
-    p = subprocess.Popen(clean_command, shell=True,
-                         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    p.wait()
-    os.chdir(prev_path)
-    print("############ end of cleaning project #############")
 
 
 def run(testcase_dir, testcase_name, remove_whitespace=True):
@@ -297,7 +282,6 @@ def test_group_project(worksheet, sids, version):
                     save_result(worksheet, grade, sids, testcase_name, version)
                 except TimeOutException:
                     save_result(worksheet, grade, sids, testcase_name, version)
-    clean_project_artifact()
 
 
 def get_sids(code_name):
@@ -326,10 +310,7 @@ def extract_code(code_dir, compressed_code_name):
 
 
 def create_antlr_maven_project_in(project_dir):
-    try:
-        shutil.rmtree(project_dir)
-    except OSError:
-        pass
+    shutil.rmtree(project_dir, ignore_errors=True)
     os.mkdir(project_dir)
     os.mkdir(os.path.join(project_dir, java_class_source_dir))
     try:
@@ -354,10 +335,7 @@ def extract_project_from_source(code_dir, code_name, version):
         os.path.join(os.path.join(decompressed_code_location, '**'), pom_filename), recursive=True)
     if len(project_pom_file_addresses) != 0:
         pom_file_dir_address = os.path.dirname(project_pom_file_addresses[0])
-        try:
-            shutil.rmtree(project_dir)
-        except OSError:
-            pass
+        shutil.rmtree(project_dir, ignore_errors=True)
         shutil.copytree(pom_file_dir_address, project_dir)
     else:
         maven_project_detected = False
@@ -374,7 +352,7 @@ def prepare_project(code_dir, code_name, version, copy_from_source):
         if os.path.basename(project_dir) in os.listdir(base_dir):
             if not pom_filename in os.listdir(project_dir):
                 no_project_found = True
-                shutil.rmtree(project_dir)
+                shutil.rmtree(project_dir, ignore_errors=True)
         else:
             no_project_found = True
         if no_project_found:
@@ -412,7 +390,8 @@ def do_test_scenario(worksheet, code_dir, code_name, version, copy_from_source=T
                           else newer_version_sign + str(_version) + "_" + first_version_pure_name)
     if not copy_from_source:
         save_new_code_to(project_dir, code_dir, new_pure_code_name)
-    shutil.rmtree(project_dir)
+    shutil.rmtree(project_dir, ignore_errors=True)
+    print("---------------------------------- end of running tests of group", ', '.join(sids), "------------------")
     worksheet.cell(std_row, run_col).value = worksheet.cell(std_row, run_col).value + 1
 
 
@@ -453,8 +432,6 @@ def try_test(code_dir, code_name, version, test_id, copy_from_source=True):
             print('OUTPUT OF YOUR TEST IS: \n', pure_output)
         except TimeOutException:
             pass
-        finally:
-            clean_project_artifact()
 
 
 def find_sid_code_name(sids):
@@ -588,7 +565,7 @@ def check_for_prerequisites():
     elif os.path.basename(codes_dir) not in os.listdir(base_dir) or not os.path.isdir(codes_dir):
         raise Exception('There are not codes in your system to test')
     elif runner_class_java_file not in os.listdir(base_dir) or not os.path.isfile(runner_class_java_file):
-        raise Exception('There is no runner class to copy to projects')
+        raise Exception('There is no runner class to copy to non maven projects')
 
 
 def parse_run_command(command):
