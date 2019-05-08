@@ -28,7 +28,7 @@ separator = '_'
 temp_directory = 'temp'
 NUMOFSTUDENTS = 2
 loss_rate = 0.2
-default_timeout = 30
+default_timeout = 20
 RUNSNUM = "#run"
 USAGE_OF_MAVEN = "usage_of_maven"
 newer_version_sign = '$'
@@ -162,18 +162,19 @@ def build_project():
     prev_path = os.getcwd()
     os.chdir(project_dir)
     if pom_filename not in os.listdir(os.getcwd()):
+        os.chdir(prev_path)
         raise Exception("the directory you are in does not contain a maven project")
     print("############## building project ##############")
     compile_command = "mvn compile -Dmaven.compiler.source=1.8 -Dmaven.compiler.target=1.8"
     p = subprocess.Popen(compile_command, shell=True,
                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    os.chdir(prev_path)
     p.wait()
     out, err = p.communicate()
     if out is not None and FAILURE in str(out):
         print("############## code has compile error ##############")
         return False
     print("############## building done successfully ##############\n")
-    os.chdir(prev_path)
     return True
 
 
@@ -201,6 +202,7 @@ def decompress(directory, filename):
     prev_path = os.getcwd()
     os.chdir(directory)
     if not os.path.isfile(os.path.join(filename)):
+        os.chdir(prev_path)
         raise Exception('this file name does not exist on code repo')
     os.mkdir(temp_directory)
     copyfile(os.path.join(directory, filename), os.path.join(temp_directory, filename))
@@ -213,13 +215,16 @@ def decompress(directory, filename):
 
 
 def copy_items_to_dest(cur_dir, items_to_copy):
+    copied_items = set({})
     for (root, dirs, files) in os.walk(cur_dir):
         directory_key = os.path.basename(root)
-        if directory_key in items_to_copy['directories']:
+        if directory_key in items_to_copy['directories'] and not ('dir', directory_key) in copied_items:
             shutil.copytree(root, os.path.join(items_to_copy['directories'].get(directory_key), directory_key))
+            copied_items.add(('dir', directory_key))
         for file in files:
-            if file in items_to_copy['files']:
+            if file in items_to_copy['files'] and not ('file', file) in copied_items:
                 copyfile(os.path.join(root, file), os.path.join(items_to_copy['files'].get(file), file))
+                copied_items.add(('file', file))
 
 
 def handle_run_timeout(signum, frame):
@@ -246,17 +251,18 @@ def execute_project(testcase_root, testcase_name, remove_whitespace=True):
         testcase_root, testcase_name)
     p = subprocess.Popen(run_command, shell=True,
                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    os.chdir(prev_path)
     signal.signal(signal.SIGALRM, handle_run_timeout)
     signal.alarm(default_timeout)
     try:
         p.wait()
+        p.kill()
         signal.alarm(0)
     except TimeOutException as timeOutException:
         print(timeOutException)
         raise TimeOutException()
     out, err = p.communicate()
     pure_output, pure_stderr = purify_result(out, err, remove_whitespace)
-    os.chdir(prev_path)
     return pure_output, pure_stderr
 
 
@@ -321,9 +327,10 @@ def extract_code(code_dir, compressed_code_name):
 
 def create_antlr_maven_project_in(project_dir):
     try:
-        os.mkdir(project_dir)
+        shutil.rmtree(project_dir)
     except OSError:
         pass
+    os.mkdir(project_dir)
     os.mkdir(os.path.join(project_dir, java_class_source_dir))
     try:
         os.mkdir(os.path.join(project_dir, grammar_source_dir))
