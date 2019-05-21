@@ -535,7 +535,7 @@ def list_tests(prefix=None):
         columns=['testcase_name']))
 
 
-def remove_duplicate_codes(codes_dir):
+def remove_duplicate_codes(codes_dir, compressed_code_extension='.zip',newer_version_sign='$'):
     recent_students = set({})
     code_dir = codes_dir
     for (code_root, codeDirs, code_files) in os.walk(code_dir):
