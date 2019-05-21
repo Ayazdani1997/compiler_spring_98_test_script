@@ -535,7 +535,7 @@ def list_tests(prefix=None):
         columns=['testcase_name']))
 
 
-def remove_duplicate_codes():
+def remove_duplicate_codes(codes_dir):
     recent_students = set({})
     code_dir = codes_dir
     for (code_root, codeDirs, code_files) in os.walk(code_dir):
@@ -619,7 +619,7 @@ def parse_test_command(command, worksheet, excel_name):
 if __name__ == "__main__":
     check_for_prerequisites()
     check_for_testcases_format()
-    remove_duplicate_codes()
+    remove_duplicate_codes(codes_dir)
     excel_name = "Grades"
     excel_file_name = excel_name + excel_extension
     worksheet, workbook = create_excel(excel_file_name)
