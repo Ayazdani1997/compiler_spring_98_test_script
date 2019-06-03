@@ -12,13 +12,15 @@ from shutil import *
 import openpyxl
 
 base_dir = os.getcwd()
-testcases_dir = os.path.join(base_dir, "testcases")
+testcases_dir = os.path.join(base_dir, "phase3_testcases")
+codes_dir = os.path.join(base_dir, 'codes/Phase3_codes')
+excel_name = "Phase3_Grades"
+testcase_mapper_filename = "phase3_testcases.csv"
 project_dir = os.path.join(base_dir, "project_dir")
 java_class_source_dir = "src"
 grammar_source_dir = java_class_source_dir
 runner_class = 'Toorla'
 runner_class_java_file = runner_class + '.java'
-codes_dir = os.path.join(base_dir, "codes")
 FAILURE = "BUILD FAILURE"
 testcase_extension = ".trl"
 COMPILED = "Compiled"
@@ -27,12 +29,11 @@ output_extension = ".out"
 separator = '_'
 temp_directory = 'temp'
 NUMOFSTUDENTS = 2
-version_loss_rate = 0.2
+version_loss_rate = 0.1
 default_timeout_in_secs = 10
 RUNSNUM = "#run"
 USAGE_OF_MAVEN = "usage_of_maven"
 newer_version_sign = '$'
-testcase_mapper_filename = "testcases.csv"
 compressed_code_extension = ".zip"
 items_to_copy = {
     'files': {
@@ -178,20 +179,22 @@ def build_project():
     return True
 
 
-def evaluate(testcase_root, testcase_name, output):
+def evaluate(testcase_root, testcase_name, output, print_message=True):
     try:
         with open(os.path.join(testcase_root, testcase_name.split(testcase_extension)[0] + output_extension),
                   "r") as text_file:  # HYPO: file exists
-            expected = text_file.read().replace("\r\n", "").replace("\n", "").replace("\t", "").replace(" ", "")
+            expected = text_file.read().replace("\r\n", "").replace("\n", "").replace("\t", "").replace(" ", "").lower()
 
         text_file.close()
     except OSError as e:
         expected = output
     if expected != output:
-        print("TEST CASE", testcase_name, "FAILED!!!!!:\nEXPECTED:", expected, "\nOUTPUT:", output + "\n\n")
+        if print_message:
+            print("TEST CASE", testcase_name, "FAILED!!!!!:\nEXPECTED:", expected, "\nOUTPUT:", output + "\n\n")
         return False
     else:
-        print("TEST CASE", testcase_name, "PASSED!\n\n")
+        if print_message:
+            print("TEST CASE", testcase_name, "PASSED!\n\n")
         return True
 
 
@@ -235,7 +238,7 @@ def purify_result(out, err, remove_whitespace=True):
         output = output.replace("\\r\\n", "").replace("\\n", "").replace("\\t", "").replace(" ", "")
     else:
         output = output.replace("\\r\\n", "\r\n").replace("\\n", "\n").replace("\\t", "\t")
-    pure_output = output
+    pure_output = output.lower()
     pure_stderr = str(err)[2: len(str(err)) - 1]
     return pure_output, pure_stderr
 
@@ -413,23 +416,26 @@ def test_all(worksheet, version=None):
                         print(exception)
 
 
-def try_test(code_dir, code_name, version, test_id, copy_from_source=True):
-    testcase_root = ""
-    testcase_name = ""
+def get_test_addr_by_id(test_id):
     try:
         tests_csv_file = pandas.read_csv(testcase_mapper_filename)
         testcase_position = list(tests_csv_file['id']).index(test_id)
         testcase_root = tests_csv_file['testcase_dir'][testcase_position]
         testcase_name = tests_csv_file['testcase_name'][testcase_position]
+        return testcase_root, testcase_name
     except Exception:
-        print('there is a problem in tests')
+        print('no test with such id')
         exit(1)
+
+
+def try_test(code_dir, code_name, test_id, version, copy_from_source=True):
+    testcase_root, testcase_name = get_test_addr_by_id(test_id)
     prepare_project(code_dir, code_name, version, copy_from_source)
     compiled = build_project()
     if compiled:
         try:
-            pure_output, pure_stderr = run(testcase_root, testcase_name, False)
-            print('OUTPUT OF YOUR TEST IS: \n', pure_output)
+            output, stderr = run(testcase_root, testcase_name, False)
+            print('OUTPUT OF YOUR TEST IS: \n', output)
         except TimeOutException:
             pass
 
@@ -535,7 +541,7 @@ def list_tests(prefix=None):
         columns=['testcase_name']))
 
 
-def remove_duplicate_codes(codes_dir, compressed_code_extension='.zip',newer_version_sign='$'):
+def remove_duplicate_codes(codes_dir, compressed_code_extension='.zip', newer_version_sign='$'):
     recent_students = set({})
     code_dir = codes_dir
     for (code_root, codeDirs, code_files) in os.walk(code_dir):
@@ -562,37 +568,60 @@ def list_groups():
 def check_for_prerequisites():
     if os.path.basename(testcases_dir) not in os.listdir(base_dir) or not os.path.isdir(testcases_dir):
         raise Exception('There are no test cases in your system')
-    elif os.path.basename(codes_dir) not in os.listdir(base_dir) or not os.path.isdir(codes_dir):
+    elif not os.path.isdir(codes_dir):
         raise Exception('There are not codes in your system to test')
     elif runner_class_java_file not in os.listdir(base_dir) or not os.path.isfile(runner_class_java_file):
         raise Exception('There is no runner class to copy to non maven projects')
 
 
+def try_all_codes(test_id, version):
+    for (code_root, code_dirs, code_files) in os.walk(codes_dir):
+        for code_file in code_files:
+            if code_file.endswith(compressed_code_extension) and not code_file.startswith(newer_version_sign):
+                try:
+                    sids = get_sids(code_file)
+                    print("########## trying test %d for group %s ##########" % (test_id, '_'.join(sids)))
+                    try_test(code_root, code_file, test_id, version)
+                    print("########## end of trial ############\n\n")
+                except Exception as version_not_exists:
+                    print(version_not_exists)
+
+
 def parse_run_command(command):
-    print("enter sids : ")
-    sids = input().split()
-    if len(sids) <= 0:
-        print("you must enter at least one sid")
-        return
-    group_code_dir, code_name = find_sid_code_name(sids)
-    if group_code_dir is None or code_name is None:
-        print('no code with such student-ids')
-        return
-    copy_from_source = True
-    if '-noCopyFromSource' in command:
-        copy_from_source = False
-    sids = get_sids(code_name)
     print("enter test id :")
     test_id = int(input())
+    print("enter version number : ")
+    version_input = input()
+    if version_input == "":
+        version = None
+    else:
+        version = int(version_input)
     try:
-        version = get_num_of_runs_for_std(sids, worksheet)
-        try_test(group_code_dir, code_name, (version - 1 if version > 0 else 0), test_id, copy_from_source)
-    except Exception as exception:
-        print(exception)
+        if not '-all-codes' in command:
+            copy_from_source = False
+            real_sids = ["0", "0"]
+            group_code_dir, code_name = "", ""
+            if '-noCopyFromSource' not in command:
+                copy_from_source = True
+                print("enter sids : ")
+                sids = input().split()
+                if len(sids) <= 0:
+                    print("you must enter at least one sid")
+                    return
+                group_code_dir, code_name = find_sid_code_name(sids)
+                if group_code_dir is None or code_name is None:
+                    print('no code with such student-ids')
+                    return
+                real_sids = get_sids(code_name)
+            try_test(group_code_dir, code_name, test_id, (version - 1 if version > 0 else 0), copy_from_source)
+        else:
+            try_all_codes(test_id, (version - 1 if version > 0 else 0))
+    except Exception as version_not_exists:
+        print(version_not_exists)
 
 
 def parse_test_command(command, worksheet, excel_name):
-    if '-single' in command:
+    if not '-all-codes' in command:
         print("enter sids : ")
         sids = input().split()
         if len(sids) <= 0:
@@ -620,7 +649,6 @@ if __name__ == "__main__":
     check_for_prerequisites()
     check_for_testcases_format()
     remove_duplicate_codes(codes_dir)
-    excel_name = "Grades"
     excel_file_name = excel_name + excel_extension
     worksheet, workbook = create_excel(excel_file_name)
     workbook.save(excel_file_name)
