@@ -159,7 +159,7 @@ def save_result(worksheet, grade, sid_list, test_case_name=None, version=0):
     grade_students(worksheet, test_case_name, grade, sid_list, version)
 
 
-def build_project():
+def build_compiler():
     prev_path = os.getcwd()
     os.chdir(project_dir)
     if pom_filename not in os.listdir(os.getcwd()):
@@ -201,6 +201,13 @@ def evaluate(testcase_root, testcase_name, output, print_message=True):
         return True
 
 
+def find_junk_files_in_dir_tree(directory):
+    dir_tree = list(os.walk(directory))
+    junk_files = []
+    junk_dirs = [entity[0] for entity in dir_tree if os.path.basename(entity[0]) == "__MACOSX"]
+    return junk_files, junk_dirs
+
+
 def decompress(directory, filename):
     prev_path = os.getcwd()
     os.chdir(directory)
@@ -214,7 +221,13 @@ def decompress(directory, filename):
     zip_ref.close()
     os.remove(os.path.join(temp_directory, filename))
     os.chdir(prev_path)
-    return os.path.join(directory, temp_directory)
+    complete_path = os.path.join(directory, temp_directory)
+    junk_files, junk_dirs = find_junk_files_in_dir_tree(complete_path)
+    for _file in junk_files:
+        os.remove(_file)
+    for _dir in junk_dirs:
+        shutil.rmtree(_dir)
+    return complete_path
 
 
 def copy_items_to_dest(cur_dir, items_to_copy):
@@ -234,7 +247,7 @@ def handle_run_timeout(signum, frame):
     raise TimeOutException()
 
 
-def execute_project(testcase_root, testcase_name):
+def partial_compile_test(testcase_root, testcase_name):
     prev_path = os.getcwd()
     os.chdir(project_dir)
     runner = runner_class
@@ -262,7 +275,7 @@ def execute_project(testcase_root, testcase_name):
 def run(testcase_dir, testcase_name):
     print("############## running code with test case", testcase_name,
           "is started  ##############\n")
-    output, stderr = execute_project(testcase_dir, testcase_name)
+    output, stderr = partial_compile_test(testcase_dir, testcase_name)
     return output, stderr
 
 
@@ -376,7 +389,7 @@ def do_test_scenario(worksheet, code_dir, code_name, version, copy_from_source=T
                                                             USAGE_OF_MAVEN)).value = "Yes" if maven_project_detected else "No"
 
     print("--------------------------------- group ", ','.join(sids), "-------------------------------------")
-    compiled = build_project()
+    compiled = build_compiler()
     if not compiled:
         save_result(worksheet, Grade.ERROR, sids)
     else:
@@ -430,7 +443,7 @@ def try_test(code_dir, code_name, test_id, version, copy_from_source=True):
         print("########## trying test %d on living code #############" % test_id)
     testcase_root, testcase_name = get_test_addr_by_id(test_id)
     prepare_project(code_dir, code_name, version, copy_from_source)
-    compiled = build_project()
+    compiled = build_compiler()
     if compiled:
         try:
             output, stderr = run(testcase_root, testcase_name)
