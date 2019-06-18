@@ -19,8 +19,8 @@ testcase_mapper_filename = "phase3_testcases.csv"
 project_dir = os.path.join(base_dir, "project_dir")
 java_class_source_dir = "src"
 grammar_source_dir = java_class_source_dir
-runner_class = 'Toorla'
-runner_class_java_file = runner_class + '.java'
+compiler_runner = 'Toorla'
+compiler_runner_java_file = compiler_runner + '.java'
 FAILURE = "BUILD FAILURE"
 testcase_extension = ".trl"
 COMPILED = "Compiled"
@@ -250,7 +250,7 @@ def handle_run_timeout(signum, frame):
 def partial_compile_test(testcase_root, testcase_name):
     prev_path = os.getcwd()
     os.chdir(project_dir)
-    runner = runner_class
+    runner = compiler_runner
     run_command = "mvn -q exec:java -Dexec.mainClass=" + runner + " -Dexec.args=" + os.path.join(
         testcase_root, testcase_name)
     p = subprocess.Popen(run_command, shell=True,
@@ -272,7 +272,7 @@ def partial_compile_test(testcase_root, testcase_name):
     return pure_output, pure_stderr
 
 
-def run(testcase_dir, testcase_name):
+def run_test(testcase_dir, testcase_name):
     print("############## running code with test case", testcase_name,
           "is started  ##############\n")
     output, stderr = partial_compile_test(testcase_dir, testcase_name)
@@ -285,7 +285,7 @@ def test_group_project(worksheet, sids, version):
             if testcase_name.endswith(testcase_extension):
                 grade = Grade.FAULT
                 try:
-                    output, stderr = run(testcase_root, testcase_name)
+                    output, stderr = run_test(testcase_root, testcase_name)
                     if evaluate(testcase_root, testcase_name, output):
                         grade = Grade.OK
                     save_result(worksheet, grade, sids, testcase_name, version)
@@ -349,7 +349,7 @@ def extract_project_from_source(code_dir, code_name, version):
     else:
         maven_project_detected = False
         create_antlr_maven_project_in(project_dir)
-        copy(runner_class_java_file, os.path.join(project_dir, java_class_source_dir))
+        copy(compiler_runner_java_file, os.path.join(project_dir, java_class_source_dir))
         copy_items_to_dest(decompressed_code_location, items_to_copy)
     rmtree(os.path.join(code_dir, decompressed_code_location))
     return maven_project_detected
@@ -446,7 +446,7 @@ def try_test(code_dir, code_name, test_id, version, copy_from_source=True):
     compiled = build_compiler()
     if compiled:
         try:
-            output, stderr = run(testcase_root, testcase_name)
+            output, stderr = run_test(testcase_root, testcase_name)
             evaluate(testcase_root, testcase_name, output)
         except TimeOutException:
             pass
@@ -582,7 +582,7 @@ def check_for_prerequisites():
         raise Exception('There are no test cases in your system')
     elif not os.path.isdir(codes_dir):
         raise Exception('There are not codes in your system to test')
-    elif runner_class_java_file not in os.listdir(base_dir) or not os.path.isfile(runner_class_java_file):
+    elif compiler_runner_java_file not in os.listdir(base_dir) or not os.path.isfile(compiler_runner_java_file):
         raise Exception('There is no runner class to copy to non maven projects')
 
 
@@ -597,7 +597,7 @@ def try_all_codes(test_id, version):
                     print(version_not_exists)
 
 
-def parse_run_command(command):
+def parse_try_command(command):
     print("enter test id :")
     test_id = int(input())
     version = 0
@@ -664,15 +664,15 @@ if __name__ == "__main__":
     help = "commands: \n\n" \
            "test: tests code with specified sids located in codes directory which is hard coded if it comes with " \
            + "-noCopyFromSource, it tests the living code on " \
-           + "project dir\n\n" \
+           + "project dir\n" \
            + "\toption all-codes : tests all codes located in code_dir dir path," \
-           + "run( r ) ( trial ): it just runs a test for a group after getting test id and student ids, if it comes " \
+           + "try: it just runs a test for a group after getting test id and student ids, if it comes " \
              "with " \
-             "-noCopyFromSource it runs the living code on project_dir" \
+             "-noCopyFromSource it runs the living code on project_dir\n" \
              "\toption all-codes : runs a test for all group" \
            + "\nhelp( h ) : prints this manual\n" \
            + "exit: termination of cli\n" \
-           + "list_tests: lists all tests available in test case directory with name" \
+           + "list_tests: lists all tests available in test case directory with name\n" \
            + "list_groups: list all groups who sent you code\n\n"
     while True:
         print('>>>>>', end=" ")
@@ -680,8 +680,8 @@ if __name__ == "__main__":
         if command == 'exit':
             print("######### bye , see you soon! #########")
             break
-        elif command.startswith('run') or command.startswith('r'):
-            parse_run_command(command)
+        elif command.startswith('try'):
+            parse_try_command(command)
         elif command.startswith('test'):
             parse_test_command(command, worksheet, excel_file_name)
         elif command == 'help' or command == 'h':
