@@ -180,17 +180,20 @@ def build_project():
 
 
 def evaluate(testcase_root, testcase_name, output, print_message=True):
+    pure_output = output.replace("\r\n", "").replace("\n", "").replace("\t", "").replace(" ", "").lower()
     try:
         with open(os.path.join(testcase_root, testcase_name.split(testcase_extension)[0] + output_extension),
                   "r") as text_file:  # HYPO: file exists
-            expected = text_file.read().replace("\r\n", "").replace("\n", "").replace("\t", "").replace(" ", "").lower()
+            expected = text_file.read()
+            pure_expected = expected.replace("\r\n", "") \
+                .replace("\n", "").replace("\t", "").replace(" ", "").lower()
 
         text_file.close()
     except OSError as e:
         expected = output
-    if expected != output:
+    if pure_expected != pure_output:
         if print_message:
-            print("TEST CASE", testcase_name, "FAILED!!!!!:\nEXPECTED:", expected, "\nOUTPUT:", output + "\n\n")
+            print("TEST CASE", testcase_name, "FAILED!!!!!:\nEXPECTED:\n", expected, "\nOUTPUT:\n", output + "\n\n")
         return False
     else:
         if print_message:
@@ -231,19 +234,7 @@ def handle_run_timeout(signum, frame):
     raise TimeOutException()
 
 
-def purify_result(out, err, remove_whitespace=True):
-    output = str(out)[
-             2: len(str(out)) - 1]
-    if remove_whitespace:
-        output = output.replace("\\r\\n", "").replace("\\n", "").replace("\\t", "").replace(" ", "")
-    else:
-        output = output.replace("\\r\\n", "\r\n").replace("\\n", "\n").replace("\\t", "\t")
-    pure_output = output.lower()
-    pure_stderr = str(err)[2: len(str(err)) - 1]
-    return pure_output, pure_stderr
-
-
-def execute_project(testcase_root, testcase_name, remove_whitespace=True):
+def execute_project(testcase_root, testcase_name):
     prev_path = os.getcwd()
     os.chdir(project_dir)
     runner = runner_class
@@ -262,15 +253,17 @@ def execute_project(testcase_root, testcase_name, remove_whitespace=True):
         print(timeOutException)
         raise TimeOutException()
     out, err = p.communicate()
-    pure_output, pure_stderr = purify_result(out, err, remove_whitespace)
+    pure_output = str(out)[2: len(str(out)) - 1]. \
+        replace("\\r\\n", "\r\n").replace("\\n", "\n").replace("\\t", "\t")
+    pure_stderr = str(err)[2: len(str(err)) - 1]
     return pure_output, pure_stderr
 
 
-def run(testcase_dir, testcase_name, remove_whitespace=True):
+def run(testcase_dir, testcase_name):
     print("############## running code with test case", testcase_name,
           "is started  ##############\n")
-    pure_output, pure_stderr = execute_project(testcase_dir, testcase_name, remove_whitespace)
-    return pure_output, pure_stderr
+    output, stderr = execute_project(testcase_dir, testcase_name)
+    return output, stderr
 
 
 def test_group_project(worksheet, sids, version):
@@ -279,8 +272,8 @@ def test_group_project(worksheet, sids, version):
             if testcase_name.endswith(testcase_extension):
                 grade = Grade.FAULT
                 try:
-                    pure_output, pure_stderr = run(testcase_root, testcase_name)
-                    if evaluate(testcase_root, testcase_name, pure_output):
+                    output, stderr = run(testcase_root, testcase_name)
+                    if evaluate(testcase_root, testcase_name, output):
                         grade = Grade.OK
                     save_result(worksheet, grade, sids, testcase_name, version)
                 except TimeOutException:
@@ -332,7 +325,7 @@ def extract_project_from_source(code_dir, code_name, version):
         raise Exception("max number of runs exceeded")
     new_code_name = ('' if _version is 0 else (newer_version_sign + str(_version) + '_')) + code_name
     if not new_code_name in os.listdir(code_dir):
-        raise Exception("version " + str(_version) + " of this code does not exist on repo")
+        raise Exception("version " + str(_version + 1) + " of this code does not exist on repo")
     decompressed_code_location = extract_code(code_dir, new_code_name)
     project_pom_file_addresses = glob.glob(
         os.path.join(os.path.join(decompressed_code_location, '**'), pom_filename), recursive=True)
@@ -429,13 +422,19 @@ def get_test_addr_by_id(test_id):
 
 
 def try_test(code_dir, code_name, test_id, version, copy_from_source=True):
+    sids = get_sids(code_name)
+    if copy_from_source:
+        print("########## trying test %d on version %d of code"
+              " for group %s ##########" % (test_id, version + 1, '_'.join(sids)))
+    else:
+        print("########## trying test %d on living code #############" % test_id)
     testcase_root, testcase_name = get_test_addr_by_id(test_id)
     prepare_project(code_dir, code_name, version, copy_from_source)
     compiled = build_project()
     if compiled:
         try:
-            output, stderr = run(testcase_root, testcase_name, False)
-            print('OUTPUT OF YOUR TEST IS: \n', output)
+            output, stderr = run(testcase_root, testcase_name)
+            evaluate(testcase_root, testcase_name, output)
         except TimeOutException:
             pass
 
@@ -579,8 +578,6 @@ def try_all_codes(test_id, version):
         for code_file in code_files:
             if code_file.endswith(compressed_code_extension) and not code_file.startswith(newer_version_sign):
                 try:
-                    sids = get_sids(code_file)
-                    print("########## trying test %d for group %s ##########" % (test_id, '_'.join(sids)))
                     try_test(code_root, code_file, test_id, version)
                     print("########## end of trial ############\n\n")
                 except Exception as version_not_exists:
@@ -590,16 +587,10 @@ def try_all_codes(test_id, version):
 def parse_run_command(command):
     print("enter test id :")
     test_id = int(input())
-    print("enter version number : ")
-    version_input = input()
-    if version_input == "":
-        version = None
-    else:
-        version = int(version_input)
+    version = 0
     try:
         if not '-all-codes' in command:
             copy_from_source = False
-            real_sids = ["0", "0"]
             group_code_dir, code_name = "", ""
             if '-noCopyFromSource' not in command:
                 copy_from_source = True
@@ -612,9 +603,14 @@ def parse_run_command(command):
                 if group_code_dir is None or code_name is None:
                     print('no code with such student-ids')
                     return
-                real_sids = get_sids(code_name)
+                print("enter version number : ")
+                version_input = input()
+                version = int(version_input)
             try_test(group_code_dir, code_name, test_id, (version - 1 if version > 0 else 0), copy_from_source)
         else:
+            print("enter version number : ")
+            version_input = input()
+            version = int(version_input)
             try_all_codes(test_id, (version - 1 if version > 0 else 0))
     except Exception as version_not_exists:
         print(version_not_exists)
@@ -652,13 +648,15 @@ if __name__ == "__main__":
     excel_file_name = excel_name + excel_extension
     worksheet, workbook = create_excel(excel_file_name)
     workbook.save(excel_file_name)
-    help = "Commands: \n\n" \
-           "test: tests all codes located in codes directory which is hard coded " \
-           "\n\t " \
-           + "option single : runs tests for one code,if it comes with -noCopyFromSource, it tests the living code on " \
-             "project dir\n\n" \
-           + "run( r ): it just runs a test for a group after getting test id and student ids, if it comes with " \
+    help = "commands: \n\n" \
+           "test: tests code with specified sids located in codes directory which is hard coded if it comes with " \
+           + "-noCopyFromSource, it tests the living code on " \
+           + "project dir\n\n" \
+           + "\toption all-codes : tests all codes located in code_dir dir path," \
+           + "run( r ) ( trial ): it just runs a test for a group after getting test id and student ids, if it comes " \
+             "with " \
              "-noCopyFromSource it runs the living code on project_dir" \
+             "\toption all-codes : runs a test for all group" \
            + "\nhelp( h ) : prints this manual\n" \
            + "exit: termination of cli\n" \
            + "list_tests: lists all tests available in test case directory with name" \
