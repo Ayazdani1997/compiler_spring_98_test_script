@@ -12,15 +12,15 @@ from shutil import *
 import openpyxl
 
 base_dir = os.getcwd()
-testcases_dir = os.path.join(base_dir, "phase3_testcases")
-codes_dir = os.path.join(base_dir, 'codes/Phase3_codes')
-excel_name = "Phase3_Grades"
-testcase_mapper_filename = "phase3_testcases.csv"
+testcases_dir = os.path.join(base_dir, "phase4_testcases")
+codes_dir = os.path.join(base_dir, 'codes/test')
+excel_name = "Phase4_Grades"
+testcase_mapper_filename = "phase4_testcases.csv"
 project_dir = os.path.join(base_dir, "project_dir")
 java_class_source_dir = "src"
 grammar_source_dir = java_class_source_dir
-runner_class = 'Toorla'
-runner_class_java_file = runner_class + '.java'
+compiler_entry_class = 'Toorla'
+compiler_entry_class_java_file = compiler_entry_class + '.java'
 FAILURE = "BUILD FAILURE"
 testcase_extension = ".trl"
 COMPILED = "Compiled"
@@ -94,6 +94,11 @@ pom_file_content = '''<?xml version="1.0" encoding="UTF-8"?>
 
 
 </project> '''
+artifact_dir = os.path.join(project_dir, 'artifact')
+jasmin_file_extension = '.j'
+runner_class = 'Runner'
+runner_class_jasmin_file = runner_class + jasmin_file_extension
+jasmin_assembler_jar_path = os.path.join(base_dir, 'jasmin.jar')
 
 max_run_num = 5
 FULL_TESTCASE_GRADE = 1
@@ -108,6 +113,16 @@ class Grade(Enum):
 class TimeOutException(Exception):
     def __str__(self):
         return "TIMEOUT OCCURRED!!!"
+
+
+class ArtifactDirMissing(Exception):
+    def __str__(self):
+        return "ARTIFACT DIRECTORY MISSING!!!"
+
+
+class RunnerClassNotFound(Exception):
+    def __str__(self):
+        return "RUNNER CLASS NOT FOUND IN ARTIFACT!!!!"
 
 
 def create_new_student(worksheet, sid_list):
@@ -165,7 +180,7 @@ def build_compiler():
     if pom_filename not in os.listdir(os.getcwd()):
         os.chdir(prev_path)
         raise Exception("the directory you are in does not contain a maven project")
-    print("############## building project ##############")
+    print("############## building compiler ##############")
     compile_command = "mvn compile -Dmaven.compiler.source=1.8 -Dmaven.compiler.target=1.8"
     p = subprocess.Popen(compile_command, shell=True,
                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -180,13 +195,12 @@ def build_compiler():
 
 
 def evaluate(testcase_root, testcase_name, output, print_message=True):
-    pure_output = output.replace("\r\n", "").replace("\n", "").replace("\t", "").replace(" ", "").lower()
+    pure_output = output
     try:
         with open(os.path.join(testcase_root, testcase_name.split(testcase_extension)[0] + output_extension),
                   "r") as text_file:  # HYPO: file exists
             expected = text_file.read()
-            pure_expected = expected.replace("\r\n", "") \
-                .replace("\n", "").replace("\t", "").replace(" ", "").lower()
+            pure_expected = expected
 
         text_file.close()
     except OSError as e:
@@ -247,10 +261,11 @@ def handle_run_timeout(signum, frame):
     raise TimeOutException()
 
 
-def partial_compile_test(testcase_root, testcase_name):
+# assuming that compiler is built now
+def compile_test(testcase_root, testcase_name, compiler_dir=project_dir, compiler_entry_class=compiler_entry_class):
     prev_path = os.getcwd()
-    os.chdir(project_dir)
-    runner = runner_class
+    os.chdir(compiler_dir)
+    runner = compiler_entry_class
     run_command = "mvn -q exec:java -Dexec.mainClass=" + runner + " -Dexec.args=" + os.path.join(
         testcase_root, testcase_name)
     p = subprocess.Popen(run_command, shell=True,
@@ -272,11 +287,66 @@ def partial_compile_test(testcase_root, testcase_name):
     return pure_output, pure_stderr
 
 
-def run(testcase_dir, testcase_name):
+def assemble_jasmin_files(artifact_dir=artifact_dir
+                          , jasmin_jar_path=jasmin_assembler_jar_path
+                          , jasmin_file_extension=jasmin_file_extension):
+    prev_path = os.getcwd()
+    os.chdir(artifact_dir)
+    assemble_command = "java -jar %s *%s" % (jasmin_jar_path, jasmin_file_extension)
+    p = subprocess.Popen(assemble_command, shell=True,
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    p.wait()
+    os.chdir(prev_path)
+
+
+def run_runner_on_test(artifact_dir=artifact_dir, runner_class=runner_class):
+    prev_path = os.getcwd()
+    os.chdir(artifact_dir)
+    run_command = "java %s" % runner_class
+    p = subprocess.Popen(run_command, shell=True,
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    os.chdir(prev_path)
+    signal.signal(signal.SIGALRM, handle_run_timeout)
+    signal.alarm(default_timeout_in_secs)
+    try:
+        p.wait()
+        signal.alarm(0)
+    except TimeOutException as timeOutException:
+        p.kill()
+        print(timeOutException)
+        raise TimeOutException()
+    out, err = p.communicate()
+    pure_output = str(out)[2: len(str(out)) - 1]. \
+        replace("\\r\\n", "\r\n").replace("\\n", "\n").replace("\\t", "\t")
+    pure_stderr = str(err)[2: len(str(err)) - 1]. \
+        replace("\\r\\n", "\r\n").replace("\\n", "\n").replace("\\t", "\t")
+    return pure_output, pure_stderr
+
+
+def run_test(testcase_dir, testcase_name, compiler_dir=project_dir
+             , compiler_entry_class=compiler_entry_class
+             , artifact_dir=artifact_dir
+             , jasmin_assembler_jar_path=jasmin_assembler_jar_path
+             , jasmin_file_extension=jasmin_file_extension
+             ):
     print("############## running code with test case", testcase_name,
           "is started  ##############\n")
-    output, stderr = partial_compile_test(testcase_dir, testcase_name)
-    return output, stderr
+    compile_test(testcase_dir, testcase_name, compiler_entry_class=compiler_entry_class, compiler_dir=compiler_dir)
+    try:
+        if not os.path.isdir(artifact_dir):
+            raise ArtifactDirMissing()
+        elif not os.path.isfile(os.path.join(artifact_dir, runner_class_jasmin_file)):
+            raise RunnerClassNotFound()
+        assemble_jasmin_files(artifact_dir, jasmin_assembler_jar_path,jasmin_file_extension=jasmin_file_extension)
+        output, stderr = run_runner_on_test(artifact_dir, runner_class)
+        shutil.rmtree(artifact_dir)
+        return output, stderr
+    except ArtifactDirMissing as artifact_missing:
+        print(artifact_missing)
+        raise artifact_missing
+    except RunnerClassNotFound as runner_class_missing:
+        print(runner_class_missing)
+        raise runner_class_missing
 
 
 def test_group_project(worksheet, sids, version):
@@ -285,11 +355,11 @@ def test_group_project(worksheet, sids, version):
             if testcase_name.endswith(testcase_extension):
                 grade = Grade.FAULT
                 try:
-                    output, stderr = run(testcase_root, testcase_name)
+                    output, stderr = run_test(testcase_root, testcase_name)
                     if evaluate(testcase_root, testcase_name, output):
                         grade = Grade.OK
                     save_result(worksheet, grade, sids, testcase_name, version)
-                except TimeOutException:
+                except TimeOutException or ArtifactDirMissing or RunnerClassNotFound:
                     save_result(worksheet, grade, sids, testcase_name, version)
 
 
@@ -349,7 +419,7 @@ def extract_project_from_source(code_dir, code_name, version):
     else:
         maven_project_detected = False
         create_antlr_maven_project_in(project_dir)
-        copy(runner_class_java_file, os.path.join(project_dir, java_class_source_dir))
+        copy(compiler_entry_class_java_file, os.path.join(project_dir, java_class_source_dir))
         copy_items_to_dest(decompressed_code_location, items_to_copy)
     rmtree(os.path.join(code_dir, decompressed_code_location))
     return maven_project_detected
@@ -446,9 +516,10 @@ def try_test(code_dir, code_name, test_id, version, copy_from_source=True):
     compiled = build_compiler()
     if compiled:
         try:
-            output, stderr = run(testcase_root, testcase_name)
+            output, stderr = run_test(testcase_root, testcase_name)
             evaluate(testcase_root, testcase_name, output)
-        except TimeOutException:
+            print("Std Error : \n %s" % stderr )
+        except TimeOutException or ArtifactDirMissing or RunnerClassNotFound:
             pass
 
 
@@ -582,8 +653,11 @@ def check_for_prerequisites():
         raise Exception('There are no test cases in your system')
     elif not os.path.isdir(codes_dir):
         raise Exception('There are not codes in your system to test')
-    elif runner_class_java_file not in os.listdir(base_dir) or not os.path.isfile(runner_class_java_file):
+    elif compiler_entry_class_java_file not in os.listdir(base_dir) or not os.path.isfile(
+            compiler_entry_class_java_file):
         raise Exception('There is no runner class to copy to non maven projects')
+    elif not os.path.isfile(jasmin_assembler_jar_path):
+        raise Exception('Jasmin assembler missing')
 
 
 def try_all_codes(test_id, version):
@@ -597,7 +671,7 @@ def try_all_codes(test_id, version):
                     print(version_not_exists)
 
 
-def parse_run_command(command):
+def parse_try_command(command):
     print("enter test id :")
     test_id = int(input())
     version = 0
@@ -664,15 +738,15 @@ if __name__ == "__main__":
     help = "commands: \n\n" \
            "test: tests code with specified sids located in codes directory which is hard coded if it comes with " \
            + "-noCopyFromSource, it tests the living code on " \
-           + "project dir\n\n" \
-           + "\toption all-codes : tests all codes located in code_dir dir path," \
-           + "run( r ) ( trial ): it just runs a test for a group after getting test id and student ids, if it comes " \
+           + "project dir\n" \
+           + "\toption all-codes : tests all codes located in code_dir dir path\n" \
+           + "try: it just tries a test for a group after getting test id and student ids, if it comes " \
              "with " \
-             "-noCopyFromSource it runs the living code on project_dir" \
+             "-noCopyFromSource it runs the living code on project_dir\n" \
              "\toption all-codes : runs a test for all group" \
            + "\nhelp( h ) : prints this manual\n" \
            + "exit: termination of cli\n" \
-           + "list_tests: lists all tests available in test case directory with name" \
+           + "list_tests: lists all tests available in test case directory with name\n" \
            + "list_groups: list all groups who sent you code\n\n"
     while True:
         print('>>>>>', end=" ")
@@ -680,8 +754,8 @@ if __name__ == "__main__":
         if command == 'exit':
             print("######### bye , see you soon! #########")
             break
-        elif command.startswith('run') or command.startswith('r'):
-            parse_run_command(command)
+        elif command.startswith('try'):
+            parse_try_command(command)
         elif command.startswith('test'):
             parse_test_command(command, worksheet, excel_file_name)
         elif command == 'help' or command == 'h':
