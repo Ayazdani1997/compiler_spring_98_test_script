@@ -13,7 +13,7 @@ import openpyxl
 
 base_dir = os.getcwd()
 testcases_dir = os.path.join(base_dir, "phase4_testcases")
-codes_dir = os.path.join(base_dir, 'codes/test')
+codes_dir = os.path.join(base_dir, 'codes/Phase4_codes')
 excel_name = "Phase4_Grades"
 testcase_mapper_filename = "phase4_testcases.csv"
 project_dir = os.path.join(base_dir, "project_dir")
@@ -266,7 +266,7 @@ def compile_test(testcase_root, testcase_name, compiler_dir=project_dir, compile
     prev_path = os.getcwd()
     os.chdir(compiler_dir)
     runner = compiler_entry_class
-    run_command = "mvn -q exec:java -Dexec.mainClass=" + runner + " -Dexec.args=" + os.path.join(
+    run_command = "mvn exec:java -Dexec.mainClass=" + runner + " -Dexec.args=" + os.path.join(
         testcase_root, testcase_name)
     p = subprocess.Popen(run_command, shell=True,
                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -283,6 +283,7 @@ def compile_test(testcase_root, testcase_name, compiler_dir=project_dir, compile
     out, err = p.communicate()
     pure_output = str(out)[2: len(str(out)) - 1]. \
         replace("\\r\\n", "\r\n").replace("\\n", "\n").replace("\\t", "\t")
+    print("OUTPUT OF YOUR COMPILER IS:\n%s" % pure_output)
     pure_stderr = str(err)[2: len(str(err)) - 1]
     return pure_output, pure_stderr
 
@@ -320,6 +321,7 @@ def run_runner_on_test(artifact_dir=artifact_dir, runner_class=runner_class):
         replace("\\r\\n", "\r\n").replace("\\n", "\n").replace("\\t", "\t")
     pure_stderr = str(err)[2: len(str(err)) - 1]. \
         replace("\\r\\n", "\r\n").replace("\\n", "\n").replace("\\t", "\t")
+    print( "Std Error :\n%s" % pure_stderr)
     return pure_output, pure_stderr
 
 
@@ -328,18 +330,25 @@ def run_test(testcase_dir, testcase_name, compiler_dir=project_dir
              , artifact_dir=artifact_dir
              , jasmin_assembler_jar_path=jasmin_assembler_jar_path
              , jasmin_file_extension=jasmin_file_extension
+             , remove_artifact=True
              ):
     print("############## running code with test case", testcase_name,
           "is started  ##############\n")
-    compile_test(testcase_dir, testcase_name, compiler_entry_class=compiler_entry_class, compiler_dir=compiler_dir)
+    shutil.rmtree(artifact_dir, ignore_errors=True)
+    os.mkdir(artifact_dir)
+    try:
+        compile_test(testcase_dir, testcase_name, compiler_entry_class=compiler_entry_class, compiler_dir=compiler_dir)
+    except TimeOutException:
+        shutil.rmtree(artifact_dir)
     try:
         if not os.path.isdir(artifact_dir):
             raise ArtifactDirMissing()
         elif not os.path.isfile(os.path.join(artifact_dir, runner_class_jasmin_file)):
             raise RunnerClassNotFound()
-        assemble_jasmin_files(artifact_dir, jasmin_assembler_jar_path,jasmin_file_extension=jasmin_file_extension)
+        assemble_jasmin_files(artifact_dir, jasmin_assembler_jar_path, jasmin_file_extension=jasmin_file_extension)
         output, stderr = run_runner_on_test(artifact_dir, runner_class)
-        shutil.rmtree(artifact_dir)
+        if remove_artifact:
+            shutil.rmtree(artifact_dir)
         return output, stderr
     except ArtifactDirMissing as artifact_missing:
         print(artifact_missing)
@@ -359,7 +368,7 @@ def test_group_project(worksheet, sids, version):
                     if evaluate(testcase_root, testcase_name, output):
                         grade = Grade.OK
                     save_result(worksheet, grade, sids, testcase_name, version)
-                except TimeOutException or ArtifactDirMissing or RunnerClassNotFound:
+                except (TimeOutException, ArtifactDirMissing, RunnerClassNotFound):
                     save_result(worksheet, grade, sids, testcase_name, version)
 
 
@@ -516,10 +525,10 @@ def try_test(code_dir, code_name, test_id, version, copy_from_source=True):
     compiled = build_compiler()
     if compiled:
         try:
-            output, stderr = run_test(testcase_root, testcase_name)
+            output, stderr = run_test(testcase_root, testcase_name, remove_artifact=False)
             evaluate(testcase_root, testcase_name, output)
-            print("Std Error : \n %s" % stderr )
-        except TimeOutException or ArtifactDirMissing or RunnerClassNotFound:
+            # print("Std Error : \n %s" % stderr)
+        except (TimeOutException, ArtifactDirMissing, RunnerClassNotFound):
             pass
 
 
@@ -747,7 +756,8 @@ if __name__ == "__main__":
            + "\nhelp( h ) : prints this manual\n" \
            + "exit: termination of cli\n" \
            + "list_tests: lists all tests available in test case directory with name\n" \
-           + "list_groups: list all groups who sent you code\n\n"
+           + "list_groups: list all groups who sent you code\n" \
+            + "set_runner_class_name: set name of jasmin runner class\n"
     while True:
         print('>>>>>', end=" ")
         command = str(input())
@@ -764,6 +774,10 @@ if __name__ == "__main__":
             list_tests()
         elif command.startswith('list_groups'):
             list_groups()
+        elif command == 'set_runner_class_name':
+            print("enter new name : ")
+            runner_class = str(input())
+            runner_class_jasmin_file = runner_class + jasmin_file_extension
         else:
             print("unknown command")
             print(help)
