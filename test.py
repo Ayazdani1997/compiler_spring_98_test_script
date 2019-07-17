@@ -12,10 +12,10 @@ from shutil import *
 import openpyxl
 
 base_dir = os.getcwd()
-testcases_dir = os.path.join(base_dir, "phase3_testcases")
-codes_dir = os.path.join(base_dir, 'codes/Phase3_codes')
-excel_name = "Phase3_Grades"
-testcase_mapper_filename = "phase3_testcases.csv"
+testcases_dir = os.path.join(base_dir, "final_tests")
+codes_dir = os.path.join(base_dir, 'codes/Phase2')
+excel_name = "Phase2_Grades"
+testcase_mapper_filename = "phase2_testcases.csv"
 project_dir = os.path.join(base_dir, "project_dir")
 java_class_source_dir = "src"
 grammar_source_dir = java_class_source_dir
@@ -180,13 +180,13 @@ def build_compiler():
 
 
 def evaluate(testcase_root, testcase_name, output, print_message=True):
-    pure_output = output.replace("\r\n", "").replace("\n", "").replace("\t", "").replace(" ", "").lower()
+    pure_output = output.replace("\r\n", "").replace("\n", "").replace("\t", "").replace(" ", "")
     try:
         with open(os.path.join(testcase_root, testcase_name.split(testcase_extension)[0] + output_extension),
                   "r") as text_file:  # HYPO: file exists
             expected = text_file.read()
             pure_expected = expected.replace("\r\n", "") \
-                .replace("\n", "").replace("\t", "").replace(" ", "").lower()
+                .replace("\n", "").replace("\t", "").replace(" ", "")
 
         text_file.close()
     except OSError as e:
@@ -583,7 +583,7 @@ def check_for_prerequisites():
     elif not os.path.isdir(codes_dir):
         raise Exception('There are not codes in your system to test')
     elif compiler_runner_java_file not in os.listdir(base_dir) or not os.path.isfile(compiler_runner_java_file):
-        raise Exception('There is no runner class to copy to non maven projects')
+        raise Exception('There is no compiler entry point ( java runner class ) to copy to non maven projects')
 
 
 def try_all_codes(test_id, version):
@@ -662,7 +662,7 @@ if __name__ == "__main__":
     worksheet, workbook = create_excel(excel_file_name)
     workbook.save(excel_file_name)
     help = "commands: \n\n" \
-           "test: tests code with specified sids located in codes directory which is hard coded if it comes with " \
+           "test: tests code with specified sids located in codes directory which is hard coded . if it comes with " \
            + "-noCopyFromSource, it tests the living code on " \
            + "project dir\n" \
            + "\toption all-codes : tests all codes located in code_dir dir path," \
