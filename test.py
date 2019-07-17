@@ -746,13 +746,13 @@ if __name__ == "__main__":
     workbook.save(excel_file_name)
     help = "commands: \n\n" \
            "test: tests code with specified sids located in codes directory which is hard coded if it comes with " \
-           + "-noCopyFromSource, it tests the living code on " \
+           + "option -noCopyFromSource, it tests the living code on " \
            + "project dir\n" \
-           + "\toption all-codes : tests all codes located in code_dir dir path\n" \
+           + "\toption -all-codes : tests all codes located in code_dir dir path\n" \
            + "try: it just tries a test for a group after getting test id and student ids, if it comes " \
              "with " \
-             "-noCopyFromSource it runs the living code on project_dir\n" \
-             "\toption all-codes : runs a test for all group" \
+             "option -noCopyFromSource , it runs the living code on project_dir\n" \
+             "\toption -all-codes : runs a test for all group" \
            + "\nhelp( h ) : prints this manual\n" \
            + "exit: termination of cli\n" \
            + "list_tests: lists all tests available in test case directory with name\n" \
